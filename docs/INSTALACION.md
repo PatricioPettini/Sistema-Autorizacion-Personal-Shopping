@@ -1,0 +1,84 @@
+# Guía de instalación en Windows
+
+Guía pensada para instalar el sistema en la PC de trabajo (no hace falta saber programar).
+
+## Paso 1 — Instalar Node.js
+
+1. Entrá a https://nodejs.org/es
+2. Descargá la versión **LTS** (botón de la izquierda).
+3. Instalala con las opciones por defecto (Siguiente → Siguiente → Instalar).
+4. Reiniciá la PC si el instalador lo pide.
+
+## Paso 2 — Copiar el sistema
+
+Copiá la carpeta **"Sistema Autorizacion Personal"** completa a la PC
+(por ejemplo, al Escritorio o a `C:\Sistemas\`).
+
+## Paso 3 — Instalar la aplicación
+
+Entrá a la carpeta y hacé **doble clic en `Instalar.bat`**.
+Se va a abrir una ventana negra que:
+
+- verifica que Node.js esté instalado,
+- crea el archivo de configuración `.env`,
+- instala los componentes y compila la aplicación.
+
+Puede tardar varios minutos la primera vez. Cuando termine, dice **"INSTALACIÓN COMPLETA"**.
+
+## Paso 4 — Iniciar
+
+Hacé **doble clic en `Iniciar.bat`**.
+
+- Se abre una ventana negra (es el "motor" del sistema: **no la cierres** mientras lo usás).
+- A los pocos segundos se abre el navegador en `http://127.0.0.1:4000`.
+
+La **primera vez** el sistema te pide crear el **usuario administrador**
+(tu nombre, un email y una contraseña de al menos 8 caracteres). Ese usuario va a poder
+crear después los usuarios de Seguridad.
+
+## Paso 5 — Configurar el email
+
+1. Entrá con el usuario administrador.
+2. Andá a **Administración → Configuración de email**.
+3. Completá los datos de **IMAP** (recepción) y **SMTP** (envío).
+   - En Gmail/Outlook, generá una **"contraseña de aplicación"** y usá esa.
+4. Tocá **Probar conexión** para verificar.
+5. Guardá. Reiniciá el sistema (cerrá la ventana negra y volvé a abrir `Iniciar.bat`)
+   para que empiece a revisar el buzón automáticamente.
+
+## Paso 6 (opcional) — OCR sin Internet
+
+Si la PC no tiene Internet permanente, ejecutá una vez (con Internet):
+
+```
+npm run ocr:download
+```
+
+Esto descarga el reconocimiento de texto en español para que funcione offline.
+
+---
+
+## Copias de seguridad
+
+Hacé **doble clic en `Backup.bat`** cada tanto. Crea una copia de la base de datos y
+los documentos en `storage/backups`, sin borrar las copias anteriores.
+
+## Si olvidás la contraseña de administrador
+
+Abrí una terminal en la carpeta del proyecto y ejecutá (reemplazá email y contraseña):
+
+```
+cd backend
+npm run reset-admin -- admin@ejemplo.com NuevaClave123
+```
+
+## Cómo detener el sistema
+
+Cerrá la ventana negra que abrió `Iniciar.bat`. El sistema deja de estar disponible
+hasta que lo vuelvas a iniciar.
+
+## Datos importantes
+
+- La información se guarda en la carpeta **`storage`** (base de datos y documentos).
+  Si querés mudar el sistema a otra PC conservando los datos, copiá también esa carpeta.
+- El sistema funciona **solo en esta PC** (`127.0.0.1`); no queda expuesto a Internet.
