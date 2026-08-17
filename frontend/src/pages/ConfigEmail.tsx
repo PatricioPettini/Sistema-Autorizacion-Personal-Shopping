@@ -60,7 +60,10 @@ export default function ConfigEmail() {
             <div className="field"><label>Usuario</label><input value={cfg.smtpUser ?? ''} onChange={(e) => set('smtpUser', e.target.value)} /></div>
             <div className="field"><label>Contraseña {cfg.smtpPasswordSet && <span className="chip">configurada</span>}</label><input type="password" value={cfg.smtpPassword ?? ''} onChange={(e) => set('smtpPassword', e.target.value)} placeholder="••••••" /></div>
             <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={!!cfg.smtpSecure} onChange={(e) => set('smtpSecure', e.target.checked)} /> Conexión segura (SSL)</label>
-            <div className="form-row" style={{ marginTop: 12 }}><div className="field"><label>Nombre remitente</label><input value={cfg.fromName ?? ''} onChange={(e) => set('fromName', e.target.value)} /></div><div className="field"><label>Email remitente</label><input value={cfg.fromAddress ?? ''} onChange={(e) => set('fromAddress', e.target.value)} /></div></div>
+            <div className="form-row" style={{ marginTop: 12 }}>
+              <div className="field"><label>Nombre remitente</label><input value={cfg.fromName ?? ''} onChange={(e) => set('fromName', e.target.value)} /><div className="hint">Nombre que ve quien recibe el aviso (ej. "Seguridad Shopping").</div></div>
+              <div className="field"><label>Email remitente</label><input value={cfg.fromAddress ?? ''} onChange={(e) => set('fromAddress', e.target.value)} placeholder={cfg.smtpUser || 'usuario@dominio.com'} /><div className="hint">Dirección "De:" de los avisos. Dejalo vacío para usar el usuario SMTP ({cfg.smtpUser || 'el de arriba'}).</div></div>
+            </div>
             <button className="btn sm" onClick={() => test('smtp')} disabled={busy}>Probar conexión SMTP</button>
           </div>
         </div>

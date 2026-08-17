@@ -1,13 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useFetch } from '../hooks';
-import { api, fmtFecha, fmtSoloFecha, hoy, tipoLabel } from '../api';
+import { api, fmtFecha, fmtSoloFecha, tipoLabel } from '../api';
 import { Badge, Spinner, Modal, useToast } from '../ui';
 import { DocList } from '../components/DocList';
 import { EmailInline } from '../components/EmailInline';
 import { useAuth } from '../auth';
 
-type AccionModal = { tipo: 'autorizar' | 'observar' | 'rechazar'; personaId: number; solicitudId: number; nombre: string };
+type AccionModal = { tipo: 'observar' | 'rechazar'; personaId: number; solicitudId: number; nombre: string };
 
 /** Extrae el nombre del local del asunto "Solicitud FAO (Local) Tipo" (igual que el backend). */
 function localFromAsunto(asunto?: string | null): string | null {
@@ -24,31 +24,34 @@ function localFromAsunto(asunto?: string | null): string | null {
 
 export default function SolicitudDetalle() {
   const { id } = useParams();
-  const { data, loading, reload } = useFetch<any>(`/solicitudes/${id}`, [id]);
+  const { data, reload } = useFetch<any>(`/solicitudes/${id}`, [id]);
   const { data: locales } = useFetch<any[]>('/locales', []);
   const isAdmin = useAuth().user?.rol === 'ADMIN';
   const { notify } = useToast();
   const nav = useNavigate();
 
+  const [revisando, setRevisando] = useState(false);
+  const [confirmarTerminar, setConfirmarTerminar] = useState(false);
+  const [resultado, setResultado] = useState<{ emailEnviado: boolean; to: string; motivo: string | null } | null>(null);
+  const [venc, setVenc] = useState('');
   const [accion, setAccion] = useState<AccionModal | null>(null);
   const [comentario, setComentario] = useState('');
-  const [fecha, setFecha] = useState(hoy());
-  const [fechaHasta, setFechaHasta] = useState(hoy());
-  const [desde, setDesde] = useState('08:00');
-  const [hasta, setHasta] = useState('18:00');
   const [nuevoComentario, setNuevoComentario] = useState('');
   const [busy, setBusy] = useState(false);
   const [agregar, setAgregar] = useState(false);
   const [nuevaPersona, setNuevaPersona] = useState({ cuil: '', nombre: '', apellido: '' });
   const [edit, setEdit] = useState<{ personaId: number; cuil: string; nombre: string; apellido: string } | null>(null);
 
+  // Sincronizar el campo de vencimiento con lo que trae la solicitud.
+  useEffect(() => { if (data?.solicitud) setVenc(data.solicitud.fechaVencimiento ?? ''); }, [data?.solicitud?.fechaVencimiento]);
+
   if (!data) return <Spinner />;
   const { solicitud, local, email, comentarios, personas } = data;
   const sinLocal = local?.nombre === '(Sin asignar)';
   const localSugerido = localFromAsunto(email?.asunto);
-  // Tipo de contratista de la solicitud (común a todas sus personas). Campo de solo lectura.
   const catsSolicitud = new Set<string>(personas.map((p: any) => p.docStatus?.categoria).filter(Boolean));
   const tipoSolicitud = catsSolicitud.size === 0 ? null : catsSolicitud.size === 1 ? [...catsSolicitud][0] : 'MIXTO';
+  const fechaVenc = solicitud.fechaVencimiento as string | null;
 
   const run = async (fn: () => Promise<any>, ok: string) => {
     setBusy(true);
@@ -58,18 +61,23 @@ export default function SolicitudDetalle() {
   };
 
   const cerrarAccion = () => { setAccion(null); setComentario(''); };
-
   const confirmarAccion = async () => {
     if (!accion) return;
     const { tipo, personaId, solicitudId } = accion;
-    if (tipo === 'autorizar') {
-      await run(() => api.post('/autorizaciones', { solicitudId, personaId, fecha, fechaHasta, horaDesde: desde, horaHasta: hasta, comentario }), 'Ingreso autorizado.');
-    } else if (tipo === 'observar') {
-      await run(() => api.post(`/solicitudes/${solicitudId}/personas/${personaId}/observar`, { comentario }), 'Persona observada.');
-    } else if (tipo === 'rechazar') {
-      await run(() => api.post(`/solicitudes/${solicitudId}/personas/${personaId}/rechazar`, { motivo: comentario }), 'Persona rechazada.');
-    }
+    if (tipo === 'observar') await run(() => api.post(`/solicitudes/${solicitudId}/personas/${personaId}/observar`, { comentario }), 'Persona observada.');
+    else if (tipo === 'rechazar') await run(() => api.post(`/solicitudes/${solicitudId}/personas/${personaId}/rechazar`, { motivo: comentario }), 'Persona rechazada.');
     cerrarAccion();
+  };
+
+  const guardarVencimiento = () => run(() => api.post(`/solicitudes/${solicitud.id}/vencimiento`, { fechaVencimiento: venc || null }), venc ? 'Fecha de vigencia guardada. Se autorizó a quienes tienen la documentación completa.' : 'Fecha de vigencia quitada.');
+  const terminarRevision = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ emailEnviado: boolean; to: string; motivo: string | null }>(`/solicitudes/${solicitud.id}/terminar-revision`);
+      setConfirmarTerminar(false);
+      setResultado(r);
+      reload();
+    } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(false); }
   };
 
   const asignarLocal = (localId: number) => { if (localId) run(() => api.post(`/solicitudes/${solicitud.id}/local`, { localId }), 'Local asignado.'); };
@@ -93,6 +101,47 @@ export default function SolicitudDetalle() {
     setEdit(null);
   };
 
+  // Tarjeta de una persona (checklist + acciones). Se reutiliza en el modal de revisión.
+  const PersonaCard = ({ p }: { p: any }) => (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-head" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <span>
+          <strong>{p.apellido}, {p.nombre}</strong>{' '}
+          <span className="muted" style={{ fontWeight: 400 }}>CUIL {p.cuilFormat}</span>{' '}
+          <Badge estado={p.estado} />
+          {p.vigencia === 'AUTORIZADO' && <span className="badge green" style={{ marginLeft: 6 }}>🟢 Ingreso vigente</span>}
+        </span>
+        {isAdmin && (
+          <span className="btn-row">
+            <button className="btn ghost sm" onClick={() => setEdit({ personaId: p.personaId, cuil: p.cuil ?? '', nombre: p.nombre, apellido: p.apellido })} title="Corregir datos">✎ Editar</button>
+            <button className="btn ghost sm" onClick={() => quitarPersona(p.solicitudId, p.personaId, `${p.apellido}, ${p.nombre}`)} title="Quitar de la solicitud">Quitar</button>
+          </span>
+        )}
+      </div>
+      <div className="card-body">
+        <DocList docStatus={p.docStatus} personaId={p.personaId} onChanged={reload} />
+        {p.estado === 'RECHAZADA' && p.motivoRechazo && <div className="alert error" style={{ marginTop: 10 }}>Rechazada: {p.motivoRechazo}</div>}
+        {isAdmin && (
+          <>
+            {p.docStatus.todosVerificados && !fechaVenc && (
+              <div className="alert warn" style={{ marginTop: 10 }}>✅ Documentación completa. Cargá la <strong>"Vigencia hasta"</strong> (arriba) para autorizarla.</div>
+            )}
+            {p.docStatus.todosVerificados && fechaVenc && p.estado === 'AUTORIZADA' && (
+              <div className="alert success" style={{ marginTop: 10 }}>🟢 Autorizada automáticamente. Puede ingresar hasta el <strong>{fmtSoloFecha(fechaVenc)}</strong>.</div>
+            )}
+            {!p.docStatus.todosVerificados && (
+              <div className="alert warn" style={{ marginTop: 10 }}>Faltan aprobar {p.docStatus.totalObligatorios - p.docStatus.verificadosObligatorios} de {p.docStatus.totalObligatorios} documentos obligatorios.</div>
+            )}
+            <div className="btn-row" style={{ marginTop: 12 }}>
+              <button className="btn warning sm" onClick={() => setAccion({ tipo: 'observar', personaId: p.personaId, solicitudId: p.solicitudId, nombre: `${p.apellido}, ${p.nombre}` })}>Observar</button>
+              <button className="btn danger sm" onClick={() => setAccion({ tipo: 'rechazar', personaId: p.personaId, solicitudId: p.solicitudId, nombre: `${p.apellido}, ${p.nombre}` })}>Rechazar</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <>
       <div className="page-head">
@@ -103,16 +152,18 @@ export default function SolicitudDetalle() {
             {personas.length} {personas.length === 1 ? 'persona' : 'personas'}
             {' · '}Tipo: <strong>{tipoLabel(tipoSolicitud)}</strong>
             {' · '}<Badge estado={solicitud.estado} />
+            {fechaVenc && <> {' · '}Vigencia hasta <strong>{fmtSoloFecha(fechaVenc)}</strong></>}
           </div>
         </div>
-        {isAdmin && <button className="btn primary" onClick={() => setAgregar(true)}>+ Agregar persona</button>}
+        <div className="btn-row">
+          {isAdmin && <button className="btn" onClick={() => setAgregar(true)}>+ Agregar persona</button>}
+          {isAdmin && personas.length > 0 && <button className="btn primary" onClick={() => setRevisando(true)}>🔍 Revisar documentación</button>}
+        </div>
       </div>
 
       {isAdmin && sinLocal && (
         <div className="alert warn" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span>
-            ⚠️ El local del asunto no coincide con ninguno cargado{localSugerido && <> — el email dice: <strong>“{localSugerido}”</strong></>}. Asignalo para poder autorizar:
-          </span>
+          <span>⚠️ El local del asunto no coincide con ninguno cargado{localSugerido && <> — el email dice: <strong>“{localSugerido}”</strong></>}. Asignalo para poder autorizar:</span>
           {localSugerido && <button className="btn sm primary" disabled={busy} onClick={() => crearYAsignarLocal(localSugerido)}>➕ Crear “{localSugerido}” y asignar</button>}
           <select className="btn sm" onChange={(e) => asignarLocal(Number(e.target.value))} defaultValue="" disabled={busy}>
             <option value="" disabled>o elegir uno existente…</option>
@@ -121,66 +172,28 @@ export default function SolicitudDetalle() {
         </div>
       )}
 
-      {/* Email de origen, embebido y a lo ancho, para revisar la documentación mientras se verifica cada persona. */}
-      {solicitud.emailMessageId && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div className="card-head">✉️ Email de origen (documentación recibida)</div>
-          <div className="card-body"><EmailInline emailId={solicitud.emailMessageId} wide /></div>
-        </div>
-      )}
-
-      {/* Una tarjeta por persona: checklist manual + acciones. En pantallas anchas, 2 por fila. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(430px, 1fr))', gap: 16, marginBottom: 16, alignItems: 'start' }}>
-      {personas.map((p: any) => {
-        const puedeAutorizar = !sinLocal && p.docStatus.todosVerificados;
-        const motivo = sinLocal ? 'Asigná primero el local' : !p.docStatus.todosVerificados ? 'Aprobá toda la documentación obligatoria' : '';
-        const autorizada = p.estado === 'AUTORIZADA';
-        return (
+      {/* Resumen de personas (la revisión completa se hace en el modal). */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16, alignItems: 'start' }}>
+        {personas.map((p: any) => (
           <div className="card" key={p.spId}>
-            <div className="card-head" style={{ flexWrap: 'wrap', gap: 8 }}>
-              <span>
-                <strong>{p.apellido}, {p.nombre}</strong>{' '}
-                <span className="muted" style={{ fontWeight: 400 }}>CUIL {p.cuilFormat}</span>{' '}
-                <Badge estado={p.estado} />
-                {p.vigencia === 'AUTORIZADO' && <span className="badge green" style={{ marginLeft: 6 }}>🟢 Ingreso vigente</span>}
-              </span>
-              {isAdmin && (
-                <span className="btn-row">
-                  <button className="btn ghost sm" onClick={() => setEdit({ personaId: p.personaId, cuil: p.cuil ?? '', nombre: p.nombre, apellido: p.apellido })} title="Corregir datos">✎ Editar</button>
-                  <button className="btn ghost sm" onClick={() => nav(`/personas/${p.personaId}`)}>Ver ficha</button>
-                  <button className="btn ghost sm" onClick={() => quitarPersona(p.solicitudId, p.personaId, `${p.apellido}, ${p.nombre}`)} title="Quitar de la solicitud">Quitar</button>
-                </span>
-              )}
-            </div>
-            <div className="card-body">
-              <div style={{ marginBottom: 8 }} className="muted">Revisá cada requisito contra la documentación del email. Un requisito solo cuenta como cumplido cuando lo aprobás.</div>
-              <DocList docStatus={p.docStatus} personaId={p.personaId} onChanged={reload} />
-
-              {p.estado === 'RECHAZADA' && p.motivoRechazo && <div className="alert error" style={{ marginTop: 10 }}>Rechazada: {p.motivoRechazo}</div>}
-
-              {isAdmin && (
-                <>
-                  {!sinLocal && !p.docStatus.todosVerificados && (
-                    <div className="alert warn" style={{ marginTop: 10 }}>
-                      🔒 Para autorizar, aprobá toda la documentación: {p.docStatus.verificadosObligatorios} de {p.docStatus.totalObligatorios} aprobados.
-                    </div>
-                  )}
-                  <div className="btn-row" style={{ marginTop: 12 }}>
-                    <button className="btn warning sm" onClick={() => setAccion({ tipo: 'observar', personaId: p.personaId, solicitudId: p.solicitudId, nombre: `${p.apellido}, ${p.nombre}` })}>Observar</button>
-                    <button className="btn danger sm" onClick={() => setAccion({ tipo: 'rechazar', personaId: p.personaId, solicitudId: p.solicitudId, nombre: `${p.apellido}, ${p.nombre}` })}>Rechazar</button>
-                    {!autorizada && <button className="btn success sm" disabled={!puedeAutorizar} title={motivo} onClick={() => { setFecha(hoy()); setFechaHasta(hoy()); setAccion({ tipo: 'autorizar', personaId: p.personaId, solicitudId: p.solicitudId, nombre: `${p.apellido}, ${p.nombre}` }); }}>Autorizar</button>}
-                  </div>
-                </>
-              )}
+            <div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+              <div>
+                <div><strong>{p.apellido}, {p.nombre}</strong> <span className="muted" style={{ fontSize: 12.5 }}>CUIL {p.cuilFormat}</span></div>
+                <div style={{ marginTop: 4 }}>
+                  <Badge estado={p.estado} />{' '}
+                  <span className="muted" style={{ fontSize: 12.5 }}>{p.docStatus.verificadosObligatorios}/{p.docStatus.totalObligatorios} docs aprobados</span>
+                  {p.vigencia === 'AUTORIZADO' && <span className="badge green" style={{ marginLeft: 6 }}>🟢 vigente</span>}
+                </div>
+              </div>
+              <button className="btn ghost sm" onClick={() => nav(`/personas/${p.personaId}`)}>Ver ficha</button>
             </div>
           </div>
-        );
-      })}
+        ))}
       </div>
 
       {personas.length === 0 && <div className="card"><div className="card-body empty">Esta solicitud no tiene personas. {isAdmin && 'Agregá al menos una.'}</div></div>}
 
-      {/* Comentarios de la solicitud */}
+      {/* Comentarios */}
       <div className="card">
         <div className="card-head">💬 Comentarios</div>
         <div className="card-body">
@@ -200,26 +213,45 @@ export default function SolicitudDetalle() {
         </div>
       </div>
 
-      {/* Modal de acciones por persona */}
-      {accion?.tipo === 'autorizar' && (
-        <Modal title={`Autorizar ingreso — ${accion.nombre}`} onClose={cerrarAccion}
-          footer={<><button className="btn" onClick={cerrarAccion}>Cancelar</button><button className="btn success" onClick={confirmarAccion} disabled={busy || fechaHasta < fecha}>Confirmar autorización</button></>}>
-          <div className="alert info">La autorización vale para todo el rango de fechas indicado. Para un solo día, poné la misma fecha en "desde" y "hasta".</div>
-          <div className="form-row">
-            <div className="field"><label>Fecha desde</label><input type="date" value={fecha} onChange={(e) => { setFecha(e.target.value); if (fechaHasta < e.target.value) setFechaHasta(e.target.value); }} /></div>
-            <div className="field"><label>Fecha hasta</label><input type="date" value={fechaHasta} min={fecha} onChange={(e) => setFechaHasta(e.target.value)} /></div>
+      {/* ===== Modal de revisión: 2 columnas (izq. aprobar docs / der. PDFs) ===== */}
+      {revisando && (
+        <Modal full title={`Revisión — ${sinLocal ? 'Local sin asignar' : local.nombre}`} onClose={() => setRevisando(false)}
+          footer={<>
+            <button className="btn" onClick={() => setRevisando(false)}>Cerrar</button>
+            <button className="btn primary" onClick={() => setConfirmarTerminar(true)} disabled={busy}>✅ Terminar revisión y avisar al remitente</button>
+          </>}>
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            {/* Barra de vigencia (fecha única de la solicitud) */}
+            <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: 'var(--panel-2)' }}>
+              <label style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                🗓 Vigencia hasta:
+                <input type="date" value={venc} onChange={(e) => setVenc(e.target.value)} style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 8 }} />
+              </label>
+              <button className="btn primary sm" onClick={guardarVencimiento} disabled={busy}>Guardar</button>
+              <span className="muted" style={{ fontSize: 12.5 }}>Las personas con toda la documentación aprobada quedan <strong>autorizadas hasta esta fecha</strong>.</span>
+            </div>
+            {/* 2 columnas */}
+            <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+              <div style={{ flex: '1 1 55%', overflow: 'auto', padding: 16, borderRight: '1px solid var(--border)' }}>
+                <div className="muted" style={{ marginBottom: 10 }}>Aprobá cada requisito contra los PDF de la derecha. Al completar todos, la persona queda autorizada sola.</div>
+                {personas.map((p: any) => <PersonaCard key={p.spId} p={p} />)}
+              </div>
+              <div style={{ flex: '1 1 45%', overflow: 'auto', padding: 16 }}>
+                <div style={{ fontWeight: 650, marginBottom: 10 }}>📄 Documentación (PDF)</div>
+                {solicitud.emailMessageId
+                  ? <EmailInline emailId={solicitud.emailMessageId} wide />
+                  : <p className="muted">Esta solicitud es manual (sin email). Cargá los documentos desde la ficha de cada persona.</p>}
+              </div>
+            </div>
           </div>
-          <div className="form-row">
-            <div className="field"><label>Hora desde</label><input type="time" value={desde} onChange={(e) => setDesde(e.target.value)} /></div>
-            <div className="field"><label>Hora hasta</label><input type="time" value={hasta} onChange={(e) => setHasta(e.target.value)} /></div>
-          </div>
-          <div className="field"><label>Comentario (opcional)</label><textarea rows={2} value={comentario} onChange={(e) => setComentario(e.target.value)} /></div>
         </Modal>
       )}
+
+      {/* Modales de acción por persona */}
       {accion?.tipo === 'observar' && (
         <Modal title={`Observar — ${accion.nombre}`} onClose={cerrarAccion}
           footer={<><button className="btn" onClick={cerrarAccion}>Cancelar</button><button className="btn warning" onClick={confirmarAccion} disabled={busy}>Confirmar</button></>}>
-          <div className="field"><label>Observación</label><textarea rows={3} value={comentario} onChange={(e) => setComentario(e.target.value)} placeholder="Ej: Falta presentar seguro de vida actualizado." /></div>
+          <div className="field"><label>Observación</label><textarea rows={3} value={comentario} onChange={(e) => setComentario(e.target.value)} placeholder="Ej: Falta presentar el Formulario 931 actualizado." /></div>
         </Modal>
       )}
       {accion?.tipo === 'rechazar' && (
@@ -227,6 +259,34 @@ export default function SolicitudDetalle() {
           footer={<><button className="btn" onClick={cerrarAccion}>Cancelar</button><button className="btn danger" onClick={confirmarAccion} disabled={busy || !comentario.trim()}>Confirmar rechazo</button></>}>
           <div className="alert warn">El motivo es obligatorio y quedará registrado en la auditoría.</div>
           <div className="field"><label>Motivo del rechazo *</label><textarea rows={3} value={comentario} onChange={(e) => setComentario(e.target.value)} /></div>
+        </Modal>
+      )}
+
+      {/* Confirmación de "Terminar revisión" (reemplaza el alert del navegador) */}
+      {confirmarTerminar && (
+        <Modal title="Terminar revisión" onClose={() => setConfirmarTerminar(false)}
+          footer={<>
+            <button className="btn" onClick={() => setConfirmarTerminar(false)}>Cancelar</button>
+            {!fechaVenc
+              ? <button className="btn primary" onClick={() => { setConfirmarTerminar(false); setRevisando(true); }}>Cargar fecha de vencimiento</button>
+              : <button className="btn primary" onClick={terminarRevision} disabled={busy}>Terminar y enviar email</button>}
+          </>}>
+          {!fechaVenc && (
+            <div className="alert warn">⚠️ <strong>Falta cargar la fecha de vencimiento</strong> (hasta cuándo pueden ingresar). Es obligatoria: sin esa fecha nadie queda autorizado. Cargala en la ventana de revisión y volvé a terminar.</div>
+          )}
+          {fechaVenc && (
+            <p>Se va a enviar un email al <strong>remitente del correo original</strong>{email?.remitente ? <> (<span className="muted">{email.remitente}</span>)</> : ''} con el resultado por persona: quién quedó autorizado (y hasta cuándo) y qué documentación falta.</p>
+          )}
+        </Modal>
+      )}
+
+      {/* Resultado del envío */}
+      {resultado && (
+        <Modal title="Revisión terminada" onClose={() => setResultado(null)}
+          footer={<button className="btn primary" onClick={() => setResultado(null)}>Cerrar</button>}>
+          {resultado.emailEnviado
+            ? <div className="alert success">✅ Email de resultado enviado a <strong>{resultado.to}</strong>.</div>
+            : <div className="alert warn">No se envió el email: {resultado.motivo}<br /><span className="muted" style={{ fontSize: 12.5 }}>La revisión quedó guardada igual. Podés reenviar cuando el email esté configurado.</span></div>}
         </Modal>
       )}
 

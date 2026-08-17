@@ -1,8 +1,22 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
 import { sendMail } from '../email/mailer.js';
 import { formatCuil } from '../personas/service.js';
+import { getPersonaDocStatus } from '../documentos/service.js';
 import { audit } from '../../lib/audit.js';
+
+/** Extrae la dirección de un "Nombre <addr@dom>" o devuelve el texto si ya es una dirección. */
+function extraerEmail(remitente: string | null | undefined): string {
+  if (!remitente) return '';
+  const m = remitente.match(/<([^>]+)>/);
+  return (m ? m[1] : remitente).trim();
+}
+
+function fmtFechaCorta(f: string | null | undefined): string {
+  if (!f) return '—';
+  const [y, m, d] = f.split('-');
+  return d && m && y ? `${d}/${m}/${y}` : f;
+}
 
 /** Destinatario de una solicitud/persona: el email del local (si existe). */
 function destinatario(solicitudId: number, personaId: number): { to: string; persona: any; local: any } | null {
@@ -63,4 +77,58 @@ Estado: AUTORIZADO
 ${aut.comentario ? `\nComentario: ${aut.comentario}` : ''}`;
   const enviado = await sendMail({ to: local?.email ?? '', subject: `Ingreso autorizado — ${persona.nombre} ${persona.apellido}`, text: texto });
   if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'autorizacion', entidadId: autorizacionId, detalle: { tipo: 'AUTORIZACION' } });
+}
+
+/**
+ * Email de cierre de revisión al REMITENTE del correo original: resume, por persona, si quedó
+ * autorizada (con la fecha hasta la que puede ingresar) o no (con la documentación faltante).
+ */
+export async function notifyResultadoRevision(solicitudId: number): Promise<{ enviado: boolean; to: string }> {
+  const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, solicitudId)).get();
+  if (!sol) return { enviado: false, to: '' };
+
+  // Grupo del email (todas las solicitudes del mismo correo).
+  const hermanas = sol.emailMessageId != null
+    ? db.select().from(schema.solicitudes).where(eq(schema.solicitudes.emailMessageId, sol.emailMessageId)).all()
+    : [sol];
+  const solIds = hermanas.map((s) => s.id);
+
+  const email = sol.emailMessageId ? db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, sol.emailMessageId)).get() : null;
+  const to = extraerEmail(email?.remitente);
+  if (!to) return { enviado: false, to: '' };
+
+  const localesGrupo = db.select().from(schema.locales).where(inArray(schema.locales.id, [...new Set(hermanas.map((s) => s.localId))])).all();
+  const local = localesGrupo.find((l) => l.nombre !== '(Sin asignar)') ?? localesGrupo[0];
+  const venc = hermanas.map((s) => s.fechaVencimiento).find(Boolean) ?? null;
+
+  const sps = db
+    .select({
+      personaId: schema.personas.id, cuil: schema.personas.cuil, nombre: schema.personas.nombre,
+      apellido: schema.personas.apellido, estado: schema.solicitudPersonas.estado, motivoRechazo: schema.solicitudPersonas.motivoRechazo,
+    })
+    .from(schema.solicitudPersonas)
+    .innerJoin(schema.personas, eq(schema.solicitudPersonas.personaId, schema.personas.id))
+    .where(inArray(schema.solicitudPersonas.solicitudId, solIds))
+    .orderBy(schema.personas.apellido)
+    .all();
+
+  const lineas = sps.map((p) => {
+    const nom = `${p.apellido}, ${p.nombre} (CUIL ${formatCuil(p.cuil ?? '')})`;
+    if (p.estado === 'AUTORIZADA') return `✓ ${nom}\n   AUTORIZADO — ${venc ? `puede ingresar hasta el ${fmtFechaCorta(venc)}` : 'puede ingresar (sin fecha de vencimiento definida)'}.`;
+    if (p.estado === 'RECHAZADA') return `✗ ${nom}\n   RECHAZADO${p.motivoRechazo ? ` — ${p.motivoRechazo}` : ''}.`;
+    const faltantes = getPersonaDocStatus(p.personaId).faltantes;
+    return `• ${nom}\n   PENDIENTE — falta: ${faltantes.length ? faltantes.join(', ') : 'documentación por revisar'}.`;
+  });
+
+  const texto = `Resultado de la revisión de la documentación enviada.
+
+Local: ${local?.nombre ?? '-'}
+
+${lineas.join('\n\n')}
+
+Por las personas que figuran como PENDIENTE, enviar la documentación faltante para completar la autorización.`;
+
+  const enviado = await sendMail({ to, subject: `Resultado de la revisión — ${local?.nombre ?? 'Ingreso de personal'}`, text: texto });
+  if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'solicitud', entidadId: solicitudId, detalle: { tipo: 'RESULTADO_REVISION', to } });
+  return { enviado, to };
 }

@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS solicitudes (
   local_id INTEGER NOT NULL REFERENCES locales(id),
   email_message_id INTEGER REFERENCES email_messages(id),
   estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+  fecha_vencimiento TEXT,
   motivo_rechazo TEXT,
   created_by_user_id INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

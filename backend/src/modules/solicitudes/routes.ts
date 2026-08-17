@@ -7,9 +7,9 @@ import { badRequest, notFound } from '../../lib/errors.js';
 import { nowIso } from '../../lib/datetime.js';
 import { formatCuil, findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
 import { getPersonaDocStatus } from '../documentos/service.js';
-import { getVigencia } from '../autorizaciones/service.js';
+import { getVigencia, recomputeAutorizacionPersona } from '../autorizaciones/service.js';
 import { recomputeSolicitudEstado, aggEstado, agruparPorEmail } from './service.js';
-import { notifyObservacion, notifyRechazo } from '../notifications/service.js';
+import { notifyObservacion, notifyRechazo, notifyResultadoRevision } from '../notifications/service.js';
 
 const personaInput = z.object({
   cuil: z.string().min(10, 'CUIL inválido.'),
@@ -42,6 +42,7 @@ export async function solicitudesRoutes(app: FastifyInstance) {
         local: schema.locales.nombre,
         emailMessageId: schema.solicitudes.emailMessageId,
         emailAsunto: schema.emailMessages.asunto,
+        fecha: sql<string>`coalesce(${schema.emailMessages.fechaEmail}, ${schema.emailMessages.fechaRecibido}, ${schema.solicitudes.createdAt})`,
         personasCount: sql<number>`count(${schema.solicitudPersonas.id})`,
         personasLabel: sql<string>`group_concat(${schema.personas.apellido} || ', ' || ${schema.personas.nombre}, ' · ')`,
         cuils: sql<string>`group_concat(${schema.personas.cuil}, ',')`,
@@ -62,6 +63,9 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     let list = agruparPorEmail(rows as any);
 
     if (q.estado) list = list.filter((x) => x.estado === String(q.estado));
+    // Filtro por fecha de envío (día). Se compara la parte YYYY-MM-DD de la fecha del email.
+    if (q.desde) list = list.filter((x) => (x.fecha ?? '').slice(0, 10) >= String(q.desde));
+    if (q.hasta) list = list.filter((x) => (x.fecha ?? '').slice(0, 10) <= String(q.hasta));
     const term = String(q.q ?? '').trim().toLowerCase();
     const termDigits = term.replace(/\D/g, '');
     if (term) list = list.filter((x) => x.personasLabel.toLowerCase().includes(term) || (!!termDigits && x.cuils.includes(termDigits)));
@@ -228,6 +232,42 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     db.update(schema.solicitudes).set({ localId, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, id)).run();
     audit({ userId: req.user!.id, accion: 'SOLICITUD_LOCAL_ASIGNADO', entidad: 'solicitud', entidadId: id, detalle: { localId }, ip: req.ip });
     return { ok: true };
+  });
+
+  // Fijar la fecha de vencimiento ÚNICA de la solicitud (se aplica a todo el grupo del email).
+  // Al cargarla, se autoriza automáticamente a quienes ya tienen la documentación completa.
+  app.post('/:id/vencimiento', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const raw = String((req.body as any)?.fechaVencimiento ?? '').trim();
+    const fechaVencimiento = raw || null;
+    if (fechaVencimiento && !/^\d{4}-\d{2}-\d{2}$/.test(fechaVencimiento)) throw badRequest('Fecha inválida (YYYY-MM-DD).');
+    const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
+    if (!sol) throw notFound('Solicitud no encontrada.');
+    const hermanas = sol.emailMessageId != null
+      ? db.select().from(schema.solicitudes).where(eq(schema.solicitudes.emailMessageId, sol.emailMessageId)).all()
+      : [sol];
+    for (const h of hermanas) {
+      db.update(schema.solicitudes).set({ fechaVencimiento, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, h.id)).run();
+      const sps = db.select({ personaId: schema.solicitudPersonas.personaId }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, h.id)).all();
+      for (const sp of sps) recomputeAutorizacionPersona(h.id, sp.personaId, req.user!.id);
+    }
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_VENCIMIENTO', entidad: 'solicitud', entidadId: id, detalle: { fechaVencimiento }, ip: req.ip });
+    return { ok: true, fechaVencimiento };
+  });
+
+  // Terminar la revisión: manda un email al remitente con el resultado por persona.
+  app.post('/:id/terminar-revision', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
+    if (!sol) throw notFound('Solicitud no encontrada.');
+    const res = await notifyResultadoRevision(id);
+    audit({ userId: req.user!.id, accion: 'REVISION_TERMINADA', entidad: 'solicitud', entidadId: id, detalle: { emailEnviado: res.enviado, to: res.to }, ip: req.ip });
+    return {
+      ok: true,
+      emailEnviado: res.enviado,
+      to: res.to,
+      motivo: res.enviado ? null : (res.to ? 'No se pudo enviar el email (revisá la configuración de SMTP).' : 'El correo original no tiene un remitente para responderle.'),
+    };
   });
 
   // Observar a una persona (documentación faltante / inconsistencia).

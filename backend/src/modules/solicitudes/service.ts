@@ -21,13 +21,14 @@ export function aggEstado(estadosRaw: string[]): string {
 /** Agrupa filas de solicitudes por email (o por solicitud si es manual). Devuelve grupos ordenados por updatedAt desc. */
 export interface SolicitudRow {
   id: number; estado: string; updatedAt: string; localId: number; local: string;
-  emailMessageId: number | null; emailAsunto?: string | null;
+  emailMessageId: number | null; emailAsunto?: string | null; fecha?: string | null;
   personasCount: number | null; personasLabel: string | null; cuils?: string | null;
   categorias?: string | null;
 }
 export interface SolicitudGroup {
   id: number; localId: number; local: string; emailAsunto: string | null;
   personasCount: number; personasLabel: string; cuils: string; estado: string; updatedAt: string;
+  fecha: string | null; // fecha de envío (del email) o de creación
   tipo: string | null; // EMPRESA | MONOTRIBUTISTA | MIXTO | null
 }
 
@@ -43,7 +44,7 @@ export function agruparPorEmail(rows: SolicitudRow[]): SolicitudGroup[] {
   for (const r of rows) {
     const key = r.emailMessageId != null ? `e${r.emailMessageId}` : `s${r.id}`;
     let g = groups.get(key);
-    if (!g) { g = { id: r.id, localId: r.localId, local: r.local, emailAsunto: r.emailAsunto ?? null, updatedAt: r.updatedAt, personasCount: 0, labels: [] as string[], cuils: [] as string[], estados: [] as string[], cats: new Set<string>() }; groups.set(key, g); }
+    if (!g) { g = { id: r.id, localId: r.localId, local: r.local, emailAsunto: r.emailAsunto ?? null, fecha: r.fecha ?? null, updatedAt: r.updatedAt, personasCount: 0, labels: [] as string[], cuils: [] as string[], estados: [] as string[], cats: new Set<string>() }; groups.set(key, g); }
     g.id = Math.min(g.id, r.id);
     if (g.local === '(Sin asignar)' && r.local !== '(Sin asignar)') { g.local = r.local; g.localId = r.localId; }
     g.personasCount += r.personasCount ?? 0;
@@ -54,7 +55,7 @@ export function agruparPorEmail(rows: SolicitudRow[]): SolicitudGroup[] {
     if (r.updatedAt > g.updatedAt) g.updatedAt = r.updatedAt;
   }
   return [...groups.values()]
-    .map((g) => ({ id: g.id, localId: g.localId, local: g.local, emailAsunto: g.emailAsunto, personasCount: g.personasCount, personasLabel: g.labels.join(' · '), cuils: g.cuils.join(','), estado: aggEstado(g.estados), updatedAt: g.updatedAt, tipo: tipoDeGrupo(g.cats) }))
+    .map((g) => ({ id: g.id, localId: g.localId, local: g.local, emailAsunto: g.emailAsunto, personasCount: g.personasCount, personasLabel: g.labels.join(' · '), cuils: g.cuils.join(','), estado: aggEstado(g.estados), updatedAt: g.updatedAt, fecha: g.fecha, tipo: tipoDeGrupo(g.cats) }))
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 

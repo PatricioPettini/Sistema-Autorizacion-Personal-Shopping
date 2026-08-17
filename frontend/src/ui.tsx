@@ -45,15 +45,18 @@ export function Spinner() {
   return <div className="spinner" />;
 }
 
-export function Modal({ title, children, onClose, footer, wide }: { title: string; children: ReactNode; onClose: () => void; footer?: ReactNode; wide?: boolean }) {
+export function Modal({ title, children, onClose, footer, wide, full }: { title: string; children: ReactNode; onClose: () => void; footer?: ReactNode; wide?: boolean; full?: boolean }) {
+  const style = full
+    ? { maxWidth: '96vw', width: '96vw', height: '94vh', maxHeight: '94vh', display: 'flex', flexDirection: 'column' as const }
+    : wide ? { maxWidth: 980 } : undefined;
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={wide ? { maxWidth: 980 } : undefined}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={style}>
         <div className="modal-head">
           <span>{title}</span>
           <button className="btn ghost sm" onClick={onClose}>✕</button>
         </div>
-        <div className="modal-body">{children}</div>
+        <div className="modal-body" style={full ? { flex: 1, overflow: 'hidden', padding: 0 } : undefined}>{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>

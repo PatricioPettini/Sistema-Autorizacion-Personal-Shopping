@@ -38,6 +38,7 @@ function migrateColumns(): void {
   ensureColumn('personas', 'cuil', 'TEXT');
   ensureColumn('autorizaciones', 'fecha_hasta', 'TEXT');
   ensureColumn('documentos', 'fecha_vencimiento', 'TEXT');
+  ensureColumn('solicitudes', 'fecha_vencimiento', 'TEXT'); // vencimiento único de la solicitud
 }
 
 /**

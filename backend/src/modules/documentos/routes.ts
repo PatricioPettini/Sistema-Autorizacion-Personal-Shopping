@@ -9,6 +9,7 @@ import { isAllowedFile } from '../../lib/files.js';
 import { saveDocumentVersion } from '../storage/service.js';
 import { nowIso } from '../../lib/datetime.js';
 import { env } from '../../config/env.js';
+import { recomputeAutorizacionesDePersona } from '../autorizaciones/service.js';
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -96,8 +97,6 @@ export async function documentosRoutes(app: FastifyInstance) {
     personaId: z.number().int(),
     tipoDocumentoId: z.number().int(),
     estado: z.enum(['PENDIENTE', 'VERIFICADO', 'RECHAZADO']),
-    // Fecha de vencimiento del documento (solo al aprobar). Vacío = no vence.
-    fechaVencimiento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida (YYYY-MM-DD).').nullable().optional(),
     nota: z.string().optional(),
   });
 
@@ -117,14 +116,15 @@ export async function documentosRoutes(app: FastifyInstance) {
         verificacion: data.estado,
         verificadoPorUserId: req.user!.id,
         fechaVerificacion: nowIso(),
-        // El vencimiento solo aplica cuando se APRUEBA; en otros estados se limpia.
-        fechaVencimiento: data.estado === 'VERIFICADO' ? (data.fechaVencimiento ?? null) : null,
         notaVerificacion: data.nota || null,
         updatedAt: nowIso(),
       })
       .where(eq(schema.documentos.id, doc.id))
       .run();
-    audit({ userId: req.user!.id, accion: 'DOCUMENTO_VERIFICADO', entidad: 'documento', entidadId: doc.id, detalle: { estado: data.estado, tipoDocumentoId: data.tipoDocumentoId, fechaVencimiento: data.fechaVencimiento ?? null }, ip: req.ip });
+    audit({ userId: req.user!.id, accion: 'DOCUMENTO_VERIFICADO', entidad: 'documento', entidadId: doc.id, detalle: { estado: data.estado, tipoDocumentoId: data.tipoDocumentoId }, ip: req.ip });
+    // Si con esto la persona completó (o dejó de completar) su documentación, se ajusta su
+    // autorización automáticamente en las solicitudes donde participa.
+    recomputeAutorizacionesDePersona(data.personaId, req.user!.id);
     return { ok: true };
   });
 

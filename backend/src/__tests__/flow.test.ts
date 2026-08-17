@@ -5,7 +5,7 @@ import { db, schema } from '../db/client.js';
 import { findOrCreatePersona } from '../modules/personas/service.js';
 import { saveDocumentVersion } from '../modules/storage/service.js';
 import { getPersonaDocStatus } from '../modules/documentos/service.js';
-import { getVigencia } from '../modules/autorizaciones/service.js';
+import { getVigencia, recomputeAutorizacionPersona } from '../modules/autorizaciones/service.js';
 import { todayLocal } from '../lib/datetime.js';
 
 function tipoId(codigo: string): number {
@@ -76,16 +76,13 @@ describe('documentos y verificación manual', () => {
     expect(doc.presente).toBe(true);
   });
 
-  it('un documento aprobado pero VENCIDO deja de contar como presente', () => {
+  it('un documento aprobado cuenta como presente (el vencimiento ya no es por documento)', () => {
     const { persona } = findOrCreatePersona({ cuil: '20666777888', nombre: 'Elsa', apellido: 'Ríos' });
     setCategoria(persona.id, 'EMPRESA');
-    const ayer = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    verificar(persona.id, 'FORM_931', ayer); // aprobado pero vencido ayer
-    const st = getPersonaDocStatus(persona.id);
-    const doc = st.items.find((i) => i.codigo === 'FORM_931')!;
-    expect(doc.vigencia).toBe('VENCIDO');
-    expect(doc.presente).toBe(false);
-    expect(st.vencidos).toContain('Formulario 931');
+    verificar(persona.id, 'FORM_931');
+    const doc = getPersonaDocStatus(persona.id).items.find((i) => i.codigo === 'FORM_931')!;
+    expect(doc.presente).toBe(true);
+    expect(doc.vigencia).toBe('VIGENTE');
   });
 
   it('todosVerificados solo cuando TODOS los obligatorios están aprobados y vigentes', () => {
@@ -98,6 +95,31 @@ describe('documentos y verificación manual', () => {
     expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(false); // falta 1 (Cláusula)
     verificar(persona.id, 'CLAUSULA_NO_REPETICION');
     expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(true);
+  });
+
+  it('auto-autoriza solo con documentación completa Y fecha de vencimiento cargada', () => {
+    const user = db.insert(schema.users).values({ nombre: 'Rev', email: `rev${Date.now()}@x.com`, passwordHash: 'x', rol: 'ADMIN' }).returning().get();
+    const { persona } = findOrCreatePersona({ cuil: '20555444333', nombre: 'Sara', apellido: 'Vega' });
+    setCategoria(persona.id, 'EMPRESA');
+    const local = db.insert(schema.locales).values({ nombre: `Local Auto ${Date.now()}`, estado: 'ACTIVO' }).returning().get();
+    const sol = db.insert(schema.solicitudes).values({ localId: local.id, personaId: persona.id, estado: 'PENDIENTE' }).returning().get();
+    db.insert(schema.solicitudPersonas).values({ solicitudId: sol.id, personaId: persona.id }).run();
+    const spEstado = () => db.select().from(schema.solicitudPersonas).where(and(eq(schema.solicitudPersonas.solicitudId, sol.id), eq(schema.solicitudPersonas.personaId, persona.id))).get()!.estado;
+
+    // 4/4 aprobados pero SIN fecha -> todavía NO autorizada.
+    for (const c of DOCS_EMPRESA) verificar(persona.id, c);
+    recomputeAutorizacionPersona(sol.id, persona.id, user.id);
+    expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(true);
+    expect(spEstado()).not.toBe('AUTORIZADA');
+
+    // Cargar fecha de vencimiento -> se auto-autoriza hasta esa fecha.
+    const futuro = new Date(new Date(`${todayLocal()}T12:00:00Z`).getTime() + 5 * 86400000).toISOString().slice(0, 10);
+    db.update(schema.solicitudes).set({ fechaVencimiento: futuro }).where(eq(schema.solicitudes.id, sol.id)).run();
+    recomputeAutorizacionPersona(sol.id, persona.id, user.id);
+    expect(spEstado()).toBe('AUTORIZADA');
+    expect(getVigencia(persona.id, local.id).estado).toBe('AUTORIZADO');
+    const aut = db.select().from(schema.autorizaciones).where(and(eq(schema.autorizaciones.personaId, persona.id), eq(schema.autorizaciones.estado, 'AUTORIZADA'))).get()!;
+    expect(aut.fechaHasta).toBe(futuro);
   });
 });
 

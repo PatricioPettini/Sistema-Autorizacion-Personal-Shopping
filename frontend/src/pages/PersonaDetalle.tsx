@@ -45,7 +45,7 @@ export default function PersonaDetalle() {
     <>
       <div className="page-head">
         <div>
-          <a className="muted" onClick={() => nav('/personas')} style={{ cursor: 'pointer' }}>← Personas</a>
+          <a className="muted" onClick={() => (window.history.length > 1 ? nav(-1) : nav('/personas'))} style={{ cursor: 'pointer' }}>← Volver</a>
           <h1 style={{ marginTop: 6 }}>{persona.apellido}, {persona.nombre} {isAdmin && <button className="btn ghost sm" onClick={abrirEdit} title="Corregir nombre o CUIL">✎ Editar datos</button>}</h1>
           <div className="subtitle">CUIL {persona.cuilFormat}</div>
         </div>

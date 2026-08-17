@@ -175,6 +175,9 @@ export const solicitudes = sqliteTable(
     emailMessageId: integer('email_message_id').references(() => emailMessages.id),
     // PENDIENTE | EN_REVISION | OBSERVADA | AUTORIZADA | RECHAZADA | VENCIDA | REVOCADA
     estado: text('estado').notNull().default('PENDIENTE'),
+    // Fecha de vencimiento ÚNICA de la solicitud (YYYY-MM-DD): hasta cuándo pueden ingresar
+    // las personas autorizadas de esta solicitud. La carga el admin en la revisión.
+    fechaVencimiento: text('fecha_vencimiento'),
     motivoRechazo: text('motivo_rechazo'),
     createdByUserId: integer('created_by_user_id').references(() => users.id),
     createdAt: createdAt(),

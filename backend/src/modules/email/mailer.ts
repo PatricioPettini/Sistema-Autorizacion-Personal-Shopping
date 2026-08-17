@@ -22,7 +22,9 @@ export interface OutgoingMail {
 export async function sendMail(mail: OutgoingMail): Promise<boolean> {
   const c = getEmailConfig();
   const transporter = buildTransporter();
-  if (!transporter || !c.fromAddress) {
+  // Si no se cargó "Email remitente", se usa el usuario de la cuenta SMTP.
+  const fromAddress = c.fromAddress || c.smtpUser;
+  if (!transporter || !fromAddress) {
     logger.warn(`SMTP no configurado; no se envió el email a ${mail.to} ("${mail.subject}").`);
     return false;
   }
@@ -32,7 +34,7 @@ export async function sendMail(mail: OutgoingMail): Promise<boolean> {
   }
   try {
     await transporter.sendMail({
-      from: `"${c.fromName}" <${c.fromAddress}>`,
+      from: `"${c.fromName}" <${fromAddress}>`,
       to: mail.to,
       subject: mail.subject,
       text: mail.text,

@@ -19,17 +19,13 @@ export function DocList({ docStatus, personaId, onChanged }: {
   const { notify } = useToast();
   const isAdmin = useAuth().user?.rol === 'ADMIN';
   const [busy, setBusy] = useState<number | null>(null);
-  const [venc, setVenc] = useState<Record<number, string>>({});
   if (!docStatus) return <p className="muted">Sin información.</p>;
-
-  const vencDe = (it: Item) => venc[it.tipoId] ?? it.fechaVencimiento ?? '';
 
   const verificar = async (it: Item, estado: 'VERIFICADO' | 'RECHAZADO' | 'PENDIENTE') => {
     if (!personaId) return;
     setBusy(it.tipoId);
     try {
-      const fechaVencimiento = estado === 'VERIFICADO' ? (vencDe(it) || null) : null;
-      await api.post('/documentos/verificar', { personaId, tipoDocumentoId: it.tipoId, estado, fechaVencimiento });
+      await api.post('/documentos/verificar', { personaId, tipoDocumentoId: it.tipoId, estado });
       notify(estado === 'VERIFICADO' ? 'Documento aprobado.' : estado === 'RECHAZADO' ? 'Documento marcado como faltante/rechazado.' : 'Aprobación deshecha.', 'success');
       onChanged?.();
     } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }
@@ -63,28 +59,14 @@ export function DocList({ docStatus, personaId, onChanged }: {
                 <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   {it.nombre}
                   {!it.obligatorio && <span className="chip">opcional</span>}
-                  {it.verificacion === 'VERIFICADO' && it.vigencia !== 'VENCIDO' && <span className="badge green">✓ Aprobado</span>}
-                  {it.verificacion === 'VERIFICADO' && it.vigencia === 'VENCIDO' && <span className="badge red">Vencido</span>}
-                  {it.verificacion === 'VERIFICADO' && it.vigencia === 'POR_VENCER' && <span className="badge yellow">Por vencer</span>}
+                  {it.verificacion === 'VERIFICADO' && <span className="badge green">✓ Aprobado</span>}
                   {it.verificacion === 'RECHAZADO' && <span className="badge red">Rechazado</span>}
                 </div>
-                {it.verificacion === 'VERIFICADO' && it.fechaVencimiento && (
-                  <div className="muted" style={{ fontSize: 12.5 }}>
-                    Vence: {fmtSoloFecha(it.fechaVencimiento)}
-                    {it.diasParaVencer != null && (it.diasParaVencer < 0 ? ` (vencido hace ${-it.diasParaVencer} días)` : ` (en ${it.diasParaVencer} días)`)}
-                  </div>
-                )}
                 {it.notaVerificacion && <div className="muted" style={{ fontSize: 12.5 }}>Nota: {it.notaVerificacion}</div>}
 
                 {/* Acciones de aprobación manual (el "check" de Seguridad) */}
                 {personaId && (
                   <div className="btn-row" style={{ marginTop: 8, alignItems: 'center' }}>
-                    {isAdmin && it.verificacion !== 'VERIFICADO' && (
-                      <label className="venc-field" title="Fecha de vencimiento del documento (opcional)">
-                        🗓 Vence
-                        <input type="date" value={vencDe(it)} onChange={(e) => setVenc((v) => ({ ...v, [it.tipoId]: e.target.value }))} />
-                      </label>
-                    )}
                     {isAdmin && it.verificacion !== 'VERIFICADO' && (
                       <button className="btn success sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'VERIFICADO')}>✓ Aprobar</button>
                     )}

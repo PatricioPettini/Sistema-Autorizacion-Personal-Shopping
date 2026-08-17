@@ -1,7 +1,5 @@
 import { eq, and } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
-import { daysUntil } from '../../lib/datetime.js';
-import { env } from '../../config/env.js';
 
 export interface DocTypeStatus {
   tipoId: number;
@@ -73,27 +71,13 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
     const verificacion = (doc?.verificacion ?? 'PENDIENTE') as DocTypeStatus['verificacion'];
     const verificado = verificacion === 'VERIFICADO';
 
-    // Vencimiento manual: Seguridad carga la fecha al aprobar. Al pasar, el documento vence.
-    const fechaVencimiento = doc?.fechaVencimiento ?? null;
-    let vigencia: DocTypeStatus['vigencia'] = null;
-    let dias: number | null = null;
-    if (verificado) {
-      if (fechaVencimiento) {
-        dias = daysUntil(fechaVencimiento);
-        if (dias === null) vigencia = 'VIGENTE';
-        else if (dias < 0) vigencia = 'VENCIDO';
-        else if (dias <= env.rules.expiryAlertDays) vigencia = 'POR_VENCER';
-        else vigencia = 'VIGENTE';
-      } else {
-        vigencia = 'VIGENTE'; // aprobado sin fecha de vencimiento => no vence
-      }
-    }
+    // El vencimiento ya NO es por documento: es único a nivel solicitud. Un requisito cuenta
+    // como cumplido si Seguridad lo aprobó (VERIFICADO).
+    const fechaVencimiento = null;
+    const dias: number | null = null;
+    const vigencia: DocTypeStatus['vigencia'] = verificado ? 'VIGENTE' : null;
+    const presente = verificado;
 
-    // Un requisito cuenta como cumplido solo si está VERIFICADO y no está vencido.
-    const presente = verificado && vigencia !== 'VENCIDO';
-
-    if (vigencia === 'VENCIDO') vencidos.push(tipo.nombre);
-    if (vigencia === 'POR_VENCER') porVencer.push(tipo.nombre);
     if (tipo.obligatorio && !presente) faltantes.push(tipo.nombre);
 
     items.push({
