@@ -5,6 +5,7 @@ import { db, schema } from '../../db/client.js';
 import { getEmailConfigMasked, saveEmailConfig, mergeForTest } from './service.js';
 import { verifySmtp } from '../email/mailer.js';
 import { verifyImap, pollNow, getSchedulerStatus } from '../email/reader.js';
+import { startScheduler, getSchedulerTiming } from '../email/scheduler.js';
 import { audit } from '../../lib/audit.js';
 
 const emailSchema = z.object({
@@ -32,8 +33,11 @@ export async function configRoutes(app: FastifyInstance) {
   app.put('/email', async (req) => {
     const data = emailSchema.parse(req.body);
     saveEmailConfig(data);
+    // Reiniciar el lector con la config nueva: un cambio de frecuencia (o de servidor)
+    // tiene que aplicar en el momento, sin reiniciar el sistema.
+    startScheduler({ reconfig: true });
     audit({ userId: req.user!.id, accion: 'CONFIGURACION_MODIFICADA', entidad: 'email_config', ip: req.ip });
-    return getEmailConfigMasked();
+    return { ...getEmailConfigMasked(), scheduler: { ...getSchedulerStatus(), ...getSchedulerTiming() } };
   });
 
   app.post('/email/test-smtp', async (req) => verifySmtp(mergeForTest(emailSchema.parse(req.body ?? {}))));
@@ -59,6 +63,6 @@ export async function configRoutes(app: FastifyInstance) {
       .from(schema.processingJobs)
       .where(sql`estado = 'ERROR'`)
       .get();
-    return { scheduler: getSchedulerStatus(), emailsPorEstado: porEstado, ultimosEmails: ultimo, jobsConError: jobsError?.n ?? 0 };
+    return { scheduler: { ...getSchedulerStatus(), ...getSchedulerTiming() }, emailsPorEstado: porEstado, ultimosEmails: ultimo, jobsConError: jobsError?.n ?? 0 };
   });
 }

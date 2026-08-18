@@ -6,6 +6,7 @@ import { findOrCreatePersona } from '../modules/personas/service.js';
 import { saveDocumentVersion } from '../modules/storage/service.js';
 import { getPersonaDocStatus } from '../modules/documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona } from '../modules/autorizaciones/service.js';
+import { recomputeSolicitudEstado } from '../modules/solicitudes/service.js';
 import { todayLocal } from '../lib/datetime.js';
 
 function tipoId(codigo: string): number {
@@ -120,6 +121,28 @@ describe('documentos y verificación manual', () => {
     expect(getVigencia(persona.id, local.id).estado).toBe('AUTORIZADO');
     const aut = db.select().from(schema.autorizaciones).where(and(eq(schema.autorizaciones.personaId, persona.id), eq(schema.autorizaciones.estado, 'AUTORIZADA'))).get()!;
     expect(aut.fechaHasta).toBe(futuro);
+  });
+});
+
+describe('solicitud sin Excel de personas', () => {
+  it('se puede crear una solicitud sin personas y cargarlas después', () => {
+    const local = db.insert(schema.locales).values({ nombre: `Local Vacio ${Date.now()}`, estado: 'ACTIVO' }).returning().get();
+    // Email sin Excel: la solicitud nace sin personaId y sin personas.
+    const sol = db.insert(schema.solicitudes).values({ localId: local.id, estado: 'PENDIENTE' }).returning().get();
+    expect(sol.personaId).toBeNull();
+    expect(recomputeSolicitudEstado(sol.id)).toBe('PENDIENTE');
+
+    // Carga manual posterior de dos personas.
+    for (const p of [
+      { cuil: '20999888771', nombre: 'Ana', apellido: 'Lopez' },
+      { cuil: '20999888772', nombre: 'Luis', apellido: 'Diaz' },
+    ]) {
+      const { persona } = findOrCreatePersona(p);
+      db.insert(schema.solicitudPersonas).values({ solicitudId: sol.id, personaId: persona.id }).run();
+    }
+    const n = db.select().from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, sol.id)).all().length;
+    expect(n).toBe(2);
+    expect(recomputeSolicitudEstado(sol.id)).toBe('PENDIENTE');
   });
 });
 

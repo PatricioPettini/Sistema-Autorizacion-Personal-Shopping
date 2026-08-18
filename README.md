@@ -13,7 +13,9 @@ con lectura automática de emails, registro de personas a partir de un Excel y
 ## 1. Qué es y qué hace
 
 - Lee automáticamente el email del encargado del local (IMAP). El **asunto declara el local**
-  (`Solicitud FAO (Local) …`) y un **Excel adjunto** (columnas **CUIL** y **Nombre completo**) lista a las personas.
+  (`Solicitud FAO (Local) …`) y un **Excel adjunto opcional** (columnas **CUIL** y **Nombre completo**)
+  lista a las personas. Si el email no trae Excel, la solicitud se crea igual y las personas se
+  cargan a mano desde el detalle.
 - Crea **una solicitud por email**: un **local** con **una o varias personas** a autorizar.
 - Cada persona tiene una **ficha con su documentación versionada** (nunca borra el original) y un
   **checklist manual**: cada requisito se aprueba (✓ Verificado) revisando la documentación del email.
@@ -87,12 +89,14 @@ Lo más importante:
 | `STORAGE_PATH` | Carpeta de datos y documentos (por defecto `./storage`). |
 | `TZ` | Zona horaria (`America/Argentina/Buenos_Aires`). |
 | `MAIL_IMAP_*` / `MAIL_SMTP_*` | Credenciales de email (también configurables desde la app). |
-| `MAIL_POLL_MINUTES` | Frecuencia de revisión del buzón (0 = desactivado). |
+| `MAIL_POLL_MINUTES` | Frecuencia de revisión del buzón (0 = desactivado). Valor inicial; después manda lo guardado en la app. |
 | `EXPIRY_ALERT_DAYS` | Días de anticipación para avisar vencimientos. |
 | `MAX_FILE_MB` / `MAX_ZIP_UNCOMPRESSED_MB` | Límites de tamaño (protección anti ZIP-bomb). |
 
 La configuración de email también se administra desde **Administración → Configuración de email**,
 con botón **Probar conexión**. Las contraseñas se guardan **cifradas** y no se muestran.
+Al guardar, el lector automático se **reinicia solo** con la frecuencia nueva (no hace falta reiniciar
+el sistema). En **Monitoreo** se ve si está corriendo, la última revisión y la próxima.
 
 ## 7. Base de datos
 
@@ -127,10 +131,13 @@ npm run seed       # carga datos de DEMOSTRACIÓN (usuarios, locales, personas)
   > para que el sistema no lo corte. Si no coincide con un local cargado, la solicitud queda
   > **"Sin asignar"** y el Administrador lo asigna desde el detalle. El tipo define qué documentación
   > se le exige a cada persona (ver sección 9).
-- **Excel de personas**: el email debe traer **un Excel adjunto** con las columnas **CUIL** y
-  **Nombre completo** (formato *Nombre Apellido*). El sistema detecta esas columnas por su encabezado;
+- **Excel de personas (opcional)**: si el email trae **un Excel adjunto** con las columnas **CUIL** y
+  **Nombre completo** (formato *Nombre Apellido*), el sistema detecta esas columnas por su encabezado;
   si no hay encabezados, usa la **columna A = CUIL** y **columna B = Nombre**. Con cada fila crea/asocia
   a la persona (por CUIL, sin duplicar) dentro de la solicitud.
+  **Si no hay Excel** (o no se puede leer), el email igual se procesa: la solicitud se crea con el local
+  del asunto y queda **sin personas**, con un aviso en el detalle para cargarlas a mano
+  (una por una o pegando una lista). Los adjuntos del email se ven igual desde la solicitud.
 - **Reenvíos**: si el local reenvía documentación corregida (email nuevo con los mismos CUIL de una
   solicitud abierta del mismo local), la solicitud **anterior queda "Reemplazada"** y la nueva pasa a
   **Pendiente** para re-revisar. No se duplica.
@@ -170,7 +177,8 @@ npm test
 ```
 Cubren seguridad de archivos (ZIP Slip, extensiones), lectura del Excel de personas,
 no-duplicación de personas por **CUIL**, verificación manual de documentación (un requisito solo
-cuenta como cumplido al verificarlo), versionado de documentos y vigencia de autorizaciones por **rango de fechas**.
+cuenta como cumplido al verificarlo), versionado de documentos, solicitudes creadas sin personas
+(email sin Excel) y vigencia de autorizaciones por **rango de fechas**.
 
 ## 12. Backups
 
@@ -202,7 +210,9 @@ backups anteriores.
 | "No se encontró Node.js" | Instalar Node.js LTS desde nodejs.org y reabrir `Instalar.bat`. |
 | El puerto 4000 está ocupado | Cambiar `PORT` en `.env`. |
 | No lee emails | Revisar credenciales IMAP y usar contraseña de aplicación; probar conexión desde la app. |
-| El email quedó en ERROR | Falta el Excel de personas o no se pudieron leer las columnas CUIL / Nombre completo. Ver Monitoreo. |
+| El email quedó en ERROR | No se pudo leer el email guardado o falló el procesamiento. Ver el detalle en Monitoreo. |
+| La solicitud quedó sin personas | El email no traía Excel (o no se pudo leer). Cargalas a mano desde el detalle de la solicitud. |
+| No revisa el buzón solo | Verificá en **Monitoreo** que el lector figure activo y con próxima revisión. Si dice "no está corriendo", falta el servidor IMAP o la frecuencia está en 0. |
 | La solicitud quedó "Sin asignar" | El local del asunto no coincide con uno cargado. Asignalo desde el detalle de la solicitud. |
 | Olvidé la contraseña de admin | Ver `docs/INSTALACION.md` (restablecer usuario). |
 

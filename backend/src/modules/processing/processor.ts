@@ -85,7 +85,8 @@ function esExcel(filename: string, contentType?: string): boolean {
 /**
  * Procesa un email entrante según el protocolo nuevo:
  *  - El asunto declara el local: "Solicitud FAO (Local) ...".
- *  - Un Excel adjunto (columnas CUIL y Nombre completo) lista a las personas.
+ *  - Un Excel adjunto OPCIONAL (columnas CUIL y Nombre completo) lista a las personas.
+ *    Sin Excel la solicitud se crea vacía y las personas se cargan a mano.
  *  - Se crea UNA solicitud (un local) con VARIAS personas.
  * La documentación se revisa manualmente desde el email embebido en la solicitud.
  */
@@ -120,27 +121,22 @@ export async function processEmail(emailId: number): Promise<void> {
     const localFinal = detectedLocalId ?? getPlaceholderLocalId();
     if (detectedLocalId && !email.localId) db.update(schema.emailMessages).set({ localId: detectedLocalId }).where(eq(schema.emailMessages.id, emailId)).run();
 
-    // Leer el Excel con las personas (CUIL + nombre completo).
+    // El Excel de personas es OPCIONAL. Si no viene (o no se puede leer), la solicitud
+    // se crea igual y el admin carga las personas a mano desde el detalle.
     const excel = items.find((it) => esExcel(it.filename));
-    if (!excel) {
-      setEmailEstado(emailId, 'ERROR', 'El email no trae el Excel de personas (columnas CUIL y Nombre completo).');
-      audit({ accion: 'EMAIL_SIN_EXCEL', entidad: 'email', entidadId: emailId });
-      return;
-    }
-    const filas = parsePersonasExcel(excel.buffer);
-    if (filas.length === 0) {
-      setEmailEstado(emailId, 'ERROR', 'No se pudieron leer personas del Excel (revisá las columnas CUIL y Nombre completo).');
-      return;
-    }
+    const filas = excel ? parsePersonasExcel(excel.buffer) : [];
+    const avisoPersonas = !excel
+      ? 'El email no trae Excel de personas: cargalas a mano en la solicitud.'
+      : filas.length === 0
+        ? 'No se pudieron leer personas del Excel (revisá las columnas CUIL y Nombre completo): cargalas a mano en la solicitud.'
+        : null;
+    if (avisoPersonas) audit({ accion: 'EMAIL_SIN_PERSONAS', entidad: 'email', entidadId: emailId, detalle: { motivo: avisoPersonas } });
 
     // Reusar la solicitud de este email si ya existe (idempotencia); si no, crearla.
     let sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.emailMessageId, emailId)).get();
     if (!sol) {
-      // personaId (primary contact) se completa con la primera persona más abajo; se usa placeholder temporal.
-      const first = filas[0];
-      const nc = splitNombreCompleto(first.nombreCompleto);
-      const { persona: primero } = findOrCreatePersona({ cuil: normalizeCuil(first.cuil), nombre: nc.nombre, apellido: nc.apellido });
-      sol = db.insert(schema.solicitudes).values({ personaId: primero.id, localId: localFinal, emailMessageId: emailId, estado: 'PENDIENTE' }).returning().get();
+      // personaId (contacto principal) es legacy y opcional: las personas reales van en solicitud_personas.
+      sol = db.insert(schema.solicitudes).values({ localId: localFinal, emailMessageId: emailId, estado: 'PENDIENTE' }).returning().get();
       audit({ accion: 'SOLICITUD_CREADA', entidad: 'solicitud', entidadId: sol.id, detalle: { origen: 'email', personas: filas.length } });
     } else if (detectedLocalId && sol.localId !== localFinal) {
       db.update(schema.solicitudes).set({ localId: localFinal, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, sol.id)).run();
@@ -190,8 +186,8 @@ export async function processEmail(emailId: number): Promise<void> {
     recomputeSolicitudEstado(sol.id);
     // Siempre PROCESSED: si el local no se identificó, la solicitud queda "(Sin asignar)"
     // y el admin la reasigna desde Solicitudes (ya no existe la bandeja de Revisión manual).
-    setEmailEstado(emailId, 'PROCESSED');
-    audit({ accion: 'EMAIL_PROCESADO', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, localDetectado: detectedLocalId } });
+    setEmailEstado(emailId, 'PROCESSED', avisoPersonas);
+    audit({ accion: 'EMAIL_PROCESADO', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, localDetectado: detectedLocalId, aviso: avisoPersonas } });
   } catch (err: any) {
     logger.error({ err }, `Error procesando email ${emailId}`);
     setEmailEstado(emailId, 'ERROR', err?.message ?? 'Error desconocido.');

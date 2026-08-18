@@ -42,6 +42,44 @@ function migrateColumns(): void {
 }
 
 /**
+ * `solicitudes.persona_id` era NOT NULL (modelo viejo: 1 solicitud = 1 persona).
+ * Ahora una solicitud puede nacer sin personas (email sin Excel) y cargarse a mano.
+ * SQLite no permite quitar un NOT NULL con ALTER, así que se reconstruye la tabla.
+ * Idempotente: si la columna ya es opcional, no hace nada.
+ */
+function migrateSolicitudPersonaIdOpcional(): void {
+  const cols = rawDb.prepare('PRAGMA table_info(solicitudes)').all() as { name: string; notnull: number }[];
+  const col = cols.find((c) => c.name === 'persona_id');
+  if (!col || col.notnull === 0) return;
+
+  rawDb.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+    CREATE TABLE solicitudes__new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      persona_id INTEGER REFERENCES personas(id),
+      local_id INTEGER NOT NULL REFERENCES locales(id),
+      email_message_id INTEGER REFERENCES email_messages(id),
+      estado TEXT NOT NULL DEFAULT 'PENDIENTE',
+      fecha_vencimiento TEXT,
+      motivo_rechazo TEXT,
+      created_by_user_id INTEGER REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+    INSERT INTO solicitudes__new (id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, motivo_rechazo, created_by_user_id, created_at, updated_at)
+      SELECT id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, motivo_rechazo, created_by_user_id, created_at, updated_at FROM solicitudes;
+    DROP TABLE solicitudes;
+    ALTER TABLE solicitudes__new RENAME TO solicitudes;
+    CREATE INDEX IF NOT EXISTS sol_estado_idx ON solicitudes(estado);
+    CREATE INDEX IF NOT EXISTS sol_persona_idx ON solicitudes(persona_id);
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+  logger.info('Migración: solicitudes.persona_id pasó a ser opcional.');
+}
+
+/**
  * Backfill: cada solicitud existente (modelo viejo persona única) pasa a tener
  * su fila en solicitud_personas, así el nuevo modelo (varias personas por
  * solicitud) funciona con los datos ya cargados. Idempotente.
@@ -109,6 +147,7 @@ export function getPlaceholderLocalId(): number {
 export function migrate(): void {
   runSchema();
   migrateColumns();
+  migrateSolicitudPersonaIdOpcional();
   backfillSolicitudPersonas();
   ensureDefaultDocumentTypes();
   ensurePlaceholderLocal();

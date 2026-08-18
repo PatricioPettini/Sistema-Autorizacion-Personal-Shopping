@@ -1,20 +1,28 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api';
+import { api, fmtFecha } from '../api';
 import { Spinner, useToast } from '../ui';
 
 export default function ConfigEmail() {
   const { notify } = useToast();
   const [cfg, setCfg] = useState<any>(null);
+  const [sched, setSched] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
   const load = async () => setCfg(await api.get('/config/email'));
-  useEffect(() => { load(); }, []);
+  const loadSched = async () => { try { setSched((await api.get<any>('/config/monitor')).scheduler); } catch { /* no admin / sin datos */ } };
+  useEffect(() => { load(); loadSched(); }, []);
   if (!cfg) return <Spinner />;
 
   const set = (k: string, v: any) => setCfg({ ...cfg, [k]: v });
   const guardar = async () => {
     setBusy(true);
-    try { const body = { ...cfg }; if (!body.imapPassword) delete body.imapPassword; if (!body.smtpPassword) delete body.smtpPassword; await api.put('/config/email', body); notify('Configuración guardada.', 'success'); load(); }
+    try {
+      const body = { ...cfg }; if (!body.imapPassword) delete body.imapPassword; if (!body.smtpPassword) delete body.smtpPassword;
+      const r = await api.put<any>('/config/email', body);
+      setSched(r.scheduler ?? null);
+      notify(r.scheduler?.activo ? `Configuración guardada. Revisión automática cada ${r.scheduler.pollMinutes} min.` : 'Configuración guardada. Revisión automática desactivada.', 'success');
+      load();
+    }
     catch (e: any) { notify(e.message, 'error'); } finally { setBusy(false); }
   };
   const test = async (tipo: 'imap' | 'smtp') => {
@@ -31,7 +39,7 @@ export default function ConfigEmail() {
   };
   const revisarAhora = async () => {
     setBusy(true);
-    try { const r = await api.post<any>('/config/email/revisar-ahora'); notify(r.ok ? `Revisión OK: ${r.nuevos} nuevos, ${r.procesados} procesados.` : `Error: ${r.error}`, r.ok ? 'success' : 'error'); }
+    try { const r = await api.post<any>('/config/email/revisar-ahora'); notify(r.ok ? `Revisión OK: ${r.nuevos} nuevos, ${r.procesados} procesados.` : `Error: ${r.error}`, r.ok ? 'success' : 'error'); loadSched(); }
     catch (e: any) { notify(e.message, 'error'); } finally { setBusy(false); }
   };
 
@@ -71,7 +79,7 @@ export default function ConfigEmail() {
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="card-body form-row" style={{ alignItems: 'flex-end' }}>
-          <div className="field" style={{ maxWidth: 220 }}><label>Frecuencia de revisión (minutos)</label><input type="number" value={cfg.pollMinutes ?? 5} onChange={(e) => set('pollMinutes', Number(e.target.value))} /><div className="hint">0 = desactivado. El cambio aplica al reiniciar.</div></div>
+          <div className="field" style={{ maxWidth: 220 }}><label>Frecuencia de revisión (minutos)</label><input type="number" value={cfg.pollMinutes ?? 5} onChange={(e) => set('pollMinutes', Number(e.target.value))} /><div className="hint">0 = desactivado. El cambio aplica apenas guardás (no hace falta reiniciar).</div></div>
           <div className="field" style={{ maxWidth: 220 }}><label>Carpeta "Procesados" (opcional)</label><input value={cfg.processedFolder ?? ''} onChange={(e) => set('processedFolder', e.target.value)} placeholder="Procesados" /></div>
         </div>
       </div>
@@ -80,6 +88,15 @@ export default function ConfigEmail() {
         <button className="btn primary" onClick={guardar} disabled={busy}>Guardar configuración</button>
         <button className="btn" onClick={revisarAhora} disabled={busy}>Revisar buzón ahora</button>
       </div>
+
+      {sched && (
+        <div className={`alert ${sched.activo ? 'info' : 'warn'}`} style={{ marginTop: 16 }}>
+          {sched.activo
+            ? <>Revisión automática <strong>activa</strong> cada {sched.pollMinutes} min. Próxima: <strong>{fmtFecha(sched.nextRunAt)}</strong>. Última: {sched.lastSyncAt ? fmtFecha(sched.lastSyncAt) : 'todavía no corrió'}.</>
+            : <>Revisión automática <strong>desactivada</strong> {sched.configurado ? '(frecuencia en 0)' : '(falta configurar el servidor IMAP)'}. Los emails solo entran con "Revisar buzón ahora".</>}
+          {sched.lastResult && !sched.lastResult.ok && <div style={{ marginTop: 6 }}>Último error: {sched.lastResult.error}</div>}
+        </div>
+      )}
     </>
   );
 }

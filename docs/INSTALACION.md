@@ -43,8 +43,9 @@ crear después los usuarios de Seguridad.
 3. Completá los datos de **IMAP** (recepción) y **SMTP** (envío).
    - En Gmail/Outlook, generá una **"contraseña de aplicación"** y usá esa.
 4. Tocá **Probar conexión** para verificar.
-5. Guardá. Reiniciá el sistema (cerrá la ventana negra y volvé a abrir `Iniciar.bat`)
-   para que empiece a revisar el buzón automáticamente.
+5. Guardá. La revisión automática arranca sola con la frecuencia que pusiste
+   (no hace falta reiniciar). En **Administración → Monitoreo** podés ver la última
+   revisión y cuándo es la próxima.
 
 ## Paso 6 (opcional) — OCR sin Internet
 

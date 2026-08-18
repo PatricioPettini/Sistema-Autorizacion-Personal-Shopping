@@ -170,7 +170,9 @@ export const solicitudes = sqliteTable(
   'solicitudes',
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
-    personaId: integer('persona_id').notNull().references(() => personas.id),
+    // Contacto principal (legacy). Opcional: una solicitud puede existir sin personas
+    // hasta que se cargan a mano. El listado real está en solicitudPersonas.
+    personaId: integer('persona_id').references(() => personas.id),
     localId: integer('local_id').notNull().references(() => locales.id),
     emailMessageId: integer('email_message_id').references(() => emailMessages.id),
     // PENDIENTE | EN_REVISION | OBSERVADA | AUTORIZADA | RECHAZADA | VENCIDA | REVOCADA

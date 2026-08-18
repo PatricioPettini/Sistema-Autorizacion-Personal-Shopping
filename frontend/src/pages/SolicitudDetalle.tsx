@@ -39,7 +39,7 @@ export default function SolicitudDetalle() {
   const [nuevoComentario, setNuevoComentario] = useState('');
   const [busy, setBusy] = useState(false);
   const [agregar, setAgregar] = useState(false);
-  const [nuevaPersona, setNuevaPersona] = useState({ cuil: '', nombre: '', apellido: '' });
+  const [nuevaPersona, setNuevaPersona] = useState({ cuil: '', nombre: '', apellido: '', categoria: '' });
   const [edit, setEdit] = useState<{ personaId: number; cuil: string; nombre: string; apellido: string } | null>(null);
 
   // Sincronizar el campo de vencimiento con lo que trae la solicitud.
@@ -88,8 +88,8 @@ export default function SolicitudDetalle() {
   const addComentario = () => { if (!nuevoComentario.trim()) return; run(() => api.post(`/solicitudes/${solicitud.id}/comentarios`, { contenido: nuevoComentario }), 'Comentario agregado.').then(() => setNuevoComentario('')); };
   const agregarPersona = async () => {
     if (!nuevaPersona.cuil || !nuevaPersona.nombre || !nuevaPersona.apellido) { notify('Completá CUIL, nombre y apellido.', 'error'); return; }
-    await run(() => api.post(`/solicitudes/${solicitud.id}/personas`, nuevaPersona), 'Persona agregada.');
-    setAgregar(false); setNuevaPersona({ cuil: '', nombre: '', apellido: '' });
+    await run(() => api.post(`/solicitudes/${solicitud.id}/personas`, { ...nuevaPersona, categoria: nuevaPersona.categoria || undefined }), 'Persona agregada.');
+    setAgregar(false); setNuevaPersona({ cuil: '', nombre: '', apellido: '', categoria: '' });
   };
   const quitarPersona = (solicitudId: number, personaId: number, nombre: string) => {
     if (!confirm(`¿Quitar a ${nombre} de esta solicitud? (No se borra la persona ni su documentación.)`)) return;
@@ -172,6 +172,10 @@ export default function SolicitudDetalle() {
         </div>
       )}
 
+      {email?.aviso && personas.length === 0 && (
+        <div className="alert warn">📄 {email.aviso}{isAdmin && ' Usá "+ Agregar persona" (los adjuntos del email se ven más abajo).'}</div>
+      )}
+
       {/* Resumen de personas (la revisión completa se hace en el modal). */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginBottom: 16, alignItems: 'start' }}>
         {personas.map((p: any) => (
@@ -191,7 +195,12 @@ export default function SolicitudDetalle() {
         ))}
       </div>
 
-      {personas.length === 0 && <div className="card"><div className="card-body empty">Esta solicitud no tiene personas. {isAdmin && 'Agregá al menos una.'}</div></div>}
+      {personas.length === 0 && (
+        <div className="card"><div className="card-body empty">
+          Esta solicitud todavía no tiene personas.
+          {isAdmin && <> <button className="btn sm primary" style={{ marginLeft: 8 }} onClick={() => setAgregar(true)}>+ Agregar persona</button></>}
+        </div></div>
+      )}
 
       {/* Comentarios */}
       <div className="card">
@@ -298,7 +307,17 @@ export default function SolicitudDetalle() {
             <div className="field"><label>Apellido *</label><input value={nuevaPersona.apellido} onChange={(e) => setNuevaPersona({ ...nuevaPersona, apellido: e.target.value })} /></div>
             <div className="field"><label>Nombre *</label><input value={nuevaPersona.nombre} onChange={(e) => setNuevaPersona({ ...nuevaPersona, nombre: e.target.value })} /></div>
           </div>
-          <div className="field"><label>CUIL *</label><input value={nuevaPersona.cuil} onChange={(e) => setNuevaPersona({ ...nuevaPersona, cuil: e.target.value })} placeholder="20-30123456-7" /></div>
+          <div className="form-row">
+            <div className="field"><label>CUIL *</label><input value={nuevaPersona.cuil} onChange={(e) => setNuevaPersona({ ...nuevaPersona, cuil: e.target.value })} placeholder="20-30123456-7" /></div>
+            <div className="field"><label>Tipo de contratista</label>
+              <select value={nuevaPersona.categoria} onChange={(e) => setNuevaPersona({ ...nuevaPersona, categoria: e.target.value })}>
+                <option value="">Sin cambios</option>
+                <option value="EMPRESA">Empresa</option>
+                <option value="MONOTRIBUTISTA">Monotributista</option>
+              </select>
+              <div className="hint">Define qué documentación se le exige.</div>
+            </div>
+          </div>
         </Modal>
       )}
 

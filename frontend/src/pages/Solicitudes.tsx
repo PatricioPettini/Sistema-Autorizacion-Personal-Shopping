@@ -8,8 +8,11 @@ import { useAuth } from '../auth';
 interface Row { id: number; estado: string; updatedAt: string; fecha: string | null; local: string; localId: number; emailAsunto: string | null; personasCount: number; personasLabel: string; tipo: string | null; }
 interface Local { id: number; nombre: string; }
 
+const PLACEHOLDER_PEGADO = '20-30123456-7\tJuan Pérez\n27-12345678-4\tMaría Gómez';
 const ESTADOS = ['', 'PENDIENTE', 'EN_REVISION', 'OBSERVADA', 'AUTORIZADA', 'RECHAZADA', 'REVOCADA'];
-const VACIO = { cuil: '', nombre: '', apellido: '', localId: '' };
+interface FilaPersona { cuil: string; apellido: string; nombre: string; }
+const FILA_VACIA: FilaPersona = { cuil: '', apellido: '', nombre: '' };
+const VACIO = { localId: '', categoria: '', personas: [{ ...FILA_VACIA }] as FilaPersona[] };
 
 export default function Solicitudes() {
   const [params, setParams] = useSearchParams();
@@ -35,21 +38,55 @@ export default function Solicitudes() {
   const { notify } = useToast();
   const [nueva, setNueva] = useState(false);
   const [form, setForm] = useState(VACIO);
+  const [pegar, setPegar] = useState(false);
+  const [pegado, setPegado] = useState('');
   const [busy, setBusy] = useState(false);
 
   const localesReales = (locales ?? []).filter((l) => l.nombre !== '(Sin asignar)');
 
   const cambiarEstado = (e: string) => { setEstado(e); setParams(e ? { estado: e } : {}); };
 
+  // Filas de personas del formulario (una solicitud = un local + varias personas).
+  const setFila = (i: number, campo: keyof FilaPersona, v: string) =>
+    setForm({ ...form, personas: form.personas.map((p, j) => (j === i ? { ...p, [campo]: v } : p)) });
+  const addFila = () => setForm({ ...form, personas: [...form.personas, { ...FILA_VACIA }] });
+  const delFila = (i: number) => setForm({ ...form, personas: form.personas.length === 1 ? [{ ...FILA_VACIA }] : form.personas.filter((_, j) => j !== i) });
+
+  // Pegado masivo: una persona por línea. El CUIL se detecta por ser el token con
+  // 10+ dígitos, así que da igual si viene antes o después del nombre, y sirve
+  // cualquier separador (tab de Excel, coma, punto y coma o espacios).
+  const pegarLista = (texto: string) => {
+    const filas: FilaPersona[] = [];
+    for (const linea of texto.split(/\r?\n/)) {
+      const tokens = linea.split(/[\t;,]+|\s+/).map((x) => x.trim()).filter(Boolean);
+      const iCuil = tokens.findIndex((x) => x.replace(/\D/g, '').length >= 10);
+      if (iCuil < 0) continue;
+      // Igual que el Excel: la primera palabra es el nombre, el resto el apellido.
+      const resto = tokens.filter((_, k) => k !== iCuil);
+      filas.push({ cuil: tokens[iCuil].replace(/\D/g, ''), nombre: resto[0] ?? '', apellido: resto.slice(1).join(' ') });
+    }
+    if (filas.length === 0) { notify('No se reconoció ninguna persona. Cada línea necesita un CUIL.', 'error'); return; }
+    const previas = form.personas.filter((p) => p.cuil || p.nombre || p.apellido);
+    setForm({ ...form, personas: [...previas, ...filas] });
+    notify(`${filas.length} ${filas.length === 1 ? 'persona agregada' : 'personas agregadas'}.`, 'success');
+  };
+
   const crear = async () => {
-    if (!form.cuil || !form.nombre || !form.apellido || !form.localId) { notify('Completá CUIL, nombre, apellido y local.', 'error'); return; }
+    if (!form.localId) { notify('Elegí el local.', 'error'); return; }
+    const personas = form.personas
+      .map((p) => ({ cuil: p.cuil.replace(/\D/g, ''), nombre: p.nombre.trim(), apellido: p.apellido.trim() }))
+      .filter((p) => p.cuil || p.nombre || p.apellido);
+    if (personas.length === 0) { notify('Cargá al menos una persona.', 'error'); return; }
+    const mala = personas.findIndex((p) => p.cuil.length < 10 || !(p.nombre || p.apellido));
+    if (mala >= 0) { notify(`Revisá la persona ${mala + 1}: falta el CUIL (11 dígitos) o el nombre.`, 'error'); return; }
     setBusy(true);
     try {
-      const r = await api.post<{ solicitudId: number }>('/solicitudes/manual', {
+      const r = await api.post<{ solicitudId: number; personas: number }>('/solicitudes/manual', {
         localId: Number(form.localId),
-        personas: [{ cuil: form.cuil, nombre: form.nombre, apellido: form.apellido }],
+        categoria: form.categoria || undefined,
+        personas,
       });
-      notify('Solicitud creada. Agregá más personas desde el detalle.', 'success');
+      notify(`Solicitud creada con ${r.personas} ${r.personas === 1 ? 'persona' : 'personas'}.`, 'success');
       setNueva(false); setForm(VACIO); reload();
       nav(`/solicitudes/${r.solicitudId}`);
     } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(false); }
@@ -71,7 +108,7 @@ export default function Solicitudes() {
     <>
       <div className="page-head">
         <div><h1>Solicitudes</h1><div className="subtitle">Cada solicitud es un local con una o varias personas a autorizar</div></div>
-        {isAdmin && <button className="btn primary" onClick={() => { setForm(VACIO); setNueva(true); }}>+ Nueva solicitud</button>}
+        {isAdmin && <button className="btn primary" onClick={() => { setForm({ ...VACIO, personas: [{ ...FILA_VACIA }] }); setPegar(false); setPegado(''); setNueva(true); }}>+ Nueva solicitud</button>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -143,18 +180,53 @@ export default function Solicitudes() {
       {nueva && (
         <Modal title="Nueva solicitud" onClose={() => setNueva(false)}
           footer={<><button className="btn" onClick={() => setNueva(false)}>Cancelar</button><button className="btn primary" onClick={crear} disabled={busy}>Crear solicitud</button></>}>
-          <div className="alert info">Elegí el local y cargá la primera persona (por CUIL). Después podés agregar más personas desde el detalle. Si el CUIL ya existe, se usa esa persona (no se duplica).</div>
-          <div className="field"><label>Local *</label>
-            <select value={form.localId} onChange={(e) => setForm({ ...form, localId: e.target.value })}>
-              <option value="">Elegir local…</option>
-              {localesReales.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
-            </select>
-          </div>
+          <div className="alert info">Una solicitud es <strong>un local con una o varias personas</strong>. Cargá todas las que necesites. Si un CUIL ya existe, se usa esa persona (no se duplica).</div>
           <div className="form-row">
-            <div className="field"><label>Apellido *</label><input value={form.apellido} onChange={(e) => setForm({ ...form, apellido: e.target.value })} /></div>
-            <div className="field"><label>Nombre *</label><input value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} /></div>
+            <div className="field"><label>Local *</label>
+              <select value={form.localId} onChange={(e) => setForm({ ...form, localId: e.target.value })}>
+                <option value="">Elegir local…</option>
+                {localesReales.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Tipo de contratista</label>
+              <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
+                <option value="">Definir después</option>
+                <option value="EMPRESA">Empresa</option>
+                <option value="MONOTRIBUTISTA">Monotributista</option>
+              </select>
+              <div className="hint">Define qué documentación se le exige a cada persona.</div>
+            </div>
           </div>
-          <div className="field"><label>CUIL *</label><input value={form.cuil} onChange={(e) => setForm({ ...form, cuil: e.target.value })} placeholder="20-30123456-7" /></div>
+
+          <label style={{ fontWeight: 600, fontSize: 13, display: 'block', marginTop: 4 }}>Personas *</label>
+          <div className="table-wrap" style={{ marginBottom: 8 }}>
+            <table className="tbl">
+              <thead><tr><th style={{ width: 28 }}>#</th><th>Apellido</th><th>Nombre</th><th style={{ width: 170 }}>CUIL</th><th style={{ width: 40 }}></th></tr></thead>
+              <tbody>
+                {form.personas.map((p, i) => (
+                  <tr key={i}>
+                    <td className="muted">{i + 1}</td>
+                    <td><input value={p.apellido} onChange={(e) => setFila(i, 'apellido', e.target.value)} placeholder="Pérez" /></td>
+                    <td><input value={p.nombre} onChange={(e) => setFila(i, 'nombre', e.target.value)} placeholder="Juan" /></td>
+                    <td><input value={p.cuil} onChange={(e) => setFila(i, 'cuil', e.target.value)} placeholder="20-30123456-7" /></td>
+                    <td><button className="btn ghost sm" onClick={() => delFila(i)} title="Quitar fila">✕</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="btn-row">
+            <button className="btn sm" onClick={addFila}>+ Agregar otra persona</button>
+            <button className="btn ghost sm" onClick={() => setPegar(!pegar)}>{pegar ? 'Ocultar pegado masivo' : '📋 Pegar lista'}</button>
+          </div>
+          {pegar && (
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>Pegar varias personas (una por línea)</label>
+              <textarea rows={5} value={pegado} onChange={(e) => setPegado(e.target.value)} placeholder={PLACEHOLDER_PEGADO} />
+              <div className="hint">Cada línea necesita un CUIL y el nombre (formato <em>Nombre Apellido</em>, igual que el Excel). Sirve para copiar y pegar directo de un Excel o del cuerpo del email.</div>
+              <button className="btn sm" style={{ marginTop: 6 }} onClick={() => { pegarLista(pegado); setPegado(''); }}>Agregar a la lista</button>
+            </div>
+          )}
           {localesReales.length === 0 && <div className="alert warn">No hay locales cargados. Pedile al Administrador que cree los locales en Administración → Locales.</div>}
         </Modal>
       )}

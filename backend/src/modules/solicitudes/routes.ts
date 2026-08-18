@@ -11,16 +11,53 @@ import { getVigencia, recomputeAutorizacionPersona } from '../autorizaciones/ser
 import { recomputeSolicitudEstado, aggEstado, agruparPorEmail } from './service.js';
 import { notifyObservacion, notifyRechazo, notifyResultadoRevision } from '../notifications/service.js';
 
-const personaInput = z.object({
-  cuil: z.string().min(10, 'CUIL inválido.'),
-  nombre: z.string().min(1, 'Ingresá el nombre.'),
-  apellido: z.string().min(1, 'Ingresá el apellido.'),
-});
+const TIPOS = ['EMPRESA', 'MONOTRIBUTISTA'] as const;
+
+// Una persona se puede cargar como nombre + apellido, o como un solo "nombre completo".
+const personaInput = z
+  .object({
+    cuil: z.string().min(1, 'Ingresá el CUIL.'),
+    nombre: z.string().optional(),
+    apellido: z.string().optional(),
+    nombreCompleto: z.string().optional(),
+    categoria: z.enum(TIPOS).optional(),
+  })
+  .refine((p) => !!(p.nombreCompleto?.trim() || p.nombre?.trim()), { message: 'Ingresá el nombre de la persona.' })
+  .refine((p) => normalizeCuil(p.cuil).length >= 10, { message: 'CUIL inválido (11 dígitos).' });
 
 const manualSchema = z.object({
   localId: z.number().int(),
-  personas: z.array(personaInput).min(1, 'Agregá al menos una persona.'),
+  // Puede venir vacío: la solicitud se crea y las personas se cargan después.
+  personas: z.array(personaInput).default([]),
+  // Tipo de contratista para todo el grupo (define qué documentación se exige).
+  categoria: z.enum(TIPOS).optional(),
 });
+
+type PersonaInputParsed = z.infer<typeof personaInput>;
+
+/** Normaliza una persona de entrada a { cuil, nombre, apellido, categoria }. */
+function normalizarPersona(p: PersonaInputParsed, categoriaGrupo?: string) {
+  const cuil = normalizeCuil(p.cuil);
+  let nombre = (p.nombre ?? '').trim();
+  let apellido = (p.apellido ?? '').trim();
+  if (!nombre || !apellido) {
+    // Vino un solo campo (o un "nombre completo"): se parte en nombre + apellido.
+    const nc = splitNombreCompleto(p.nombreCompleto?.trim() || `${nombre} ${apellido}`.trim());
+    nombre = nc.nombre;
+    apellido = nc.apellido;
+  }
+  return { cuil, nombre, apellido, categoria: p.categoria ?? categoriaGrupo };
+}
+
+/** Alta/asociación de una persona en una solicitud. Devuelve el id y si es nueva. */
+function agregarPersonaASolicitud(solicitudId: number, p: ReturnType<typeof normalizarPersona>) {
+  const { persona, created } = findOrCreatePersona({ cuil: p.cuil, nombre: p.nombre, apellido: p.apellido });
+  if (p.categoria && persona.categoria !== p.categoria) {
+    db.update(schema.personas).set({ categoria: p.categoria, updatedAt: nowIso() }).where(eq(schema.personas.id, persona.id)).run();
+  }
+  db.insert(schema.solicitudPersonas).values({ solicitudId, personaId: persona.id }).onConflictDoNothing().run();
+  return { persona, created };
+}
 
 export async function solicitudesRoutes(app: FastifyInstance) {
   app.addHook('onRequest', app.requireAuth);
@@ -154,7 +191,7 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     return {
       solicitud: { ...sol, localId: local.id, estado: aggEstado(personas.map((p) => p.estado)) },
       local,
-      email: email ? { remitente: email.remitente, asunto: email.asunto, fecha: email.fechaEmail, adjuntos: email.attachmentsCount } : null,
+      email: email ? { id: email.id, remitente: email.remitente, asunto: email.asunto, fecha: email.fechaEmail, adjuntos: email.attachmentsCount, aviso: email.estado === 'PROCESSED' ? email.error : null } : null,
       comentarios,
       personas,
     };
@@ -165,32 +202,38 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     const data = manualSchema.parse(req.body);
     const local = db.select().from(schema.locales).where(eq(schema.locales.id, data.localId)).get();
     if (!local) throw badRequest('Local inexistente.');
-    const sol = db.insert(schema.solicitudes).values({ localId: data.localId, personaId: agregarPrimera(data.personas[0]), estado: 'PENDIENTE', createdByUserId: req.user!.id }).returning().get();
-    for (const p of data.personas) {
-      const { persona, created } = findOrCreatePersona({ cuil: normalizeCuil(p.cuil), nombre: p.nombre, apellido: p.apellido });
+
+    // CUILs repetidos dentro del mismo formulario: se cargan una sola vez.
+    const vistos = new Set<string>();
+    const personas = data.personas
+      .map((p) => normalizarPersona(p, data.categoria))
+      .filter((p) => (vistos.has(p.cuil) ? false : (vistos.add(p.cuil), true)));
+
+    const sol = db.insert(schema.solicitudes).values({ localId: data.localId, estado: 'PENDIENTE', createdByUserId: req.user!.id }).returning().get();
+    for (const p of personas) {
+      const { persona, created } = agregarPersonaASolicitud(sol.id, p);
       if (created) audit({ userId: req.user!.id, accion: 'PERSONA_CREADA', entidad: 'persona', entidadId: persona.id, ip: req.ip });
-      db.insert(schema.solicitudPersonas).values({ solicitudId: sol.id, personaId: persona.id }).onConflictDoNothing().run();
     }
     recomputeSolicitudEstado(sol.id);
-    audit({ userId: req.user!.id, accion: 'SOLICITUD_CREADA_MANUAL', entidad: 'solicitud', entidadId: sol.id, ip: req.ip });
-    return { solicitudId: sol.id };
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_CREADA_MANUAL', entidad: 'solicitud', entidadId: sol.id, detalle: { personas: personas.length, categoria: data.categoria }, ip: req.ip });
+    return { solicitudId: sol.id, personas: personas.length };
   });
 
   // Agregar una persona a una solicitud existente.
   app.post('/:id/personas', soloAdmin, async (req) => {
     const id = Number((req.params as any).id);
-    const p = personaInput.parse(req.body);
+    const p = normalizarPersona(personaInput.parse(req.body));
     const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
     if (!sol) throw notFound('Solicitud no encontrada.');
-    const { persona, created } = findOrCreatePersona({ cuil: normalizeCuil(p.cuil), nombre: p.nombre, apellido: p.apellido });
-    if (created) audit({ userId: req.user!.id, accion: 'PERSONA_CREADA', entidad: 'persona', entidadId: persona.id, ip: req.ip });
-    const exists = db
+    const yaEsta = db
       .select()
       .from(schema.solicitudPersonas)
-      .where(and(eq(schema.solicitudPersonas.solicitudId, id), eq(schema.solicitudPersonas.personaId, persona.id)))
+      .innerJoin(schema.personas, eq(schema.solicitudPersonas.personaId, schema.personas.id))
+      .where(and(eq(schema.solicitudPersonas.solicitudId, id), eq(schema.personas.cuil, p.cuil)))
       .get();
-    if (exists) throw badRequest('Esa persona ya está en la solicitud.');
-    db.insert(schema.solicitudPersonas).values({ solicitudId: id, personaId: persona.id }).run();
+    if (yaEsta) throw badRequest('Esa persona ya está en la solicitud.');
+    const { persona, created } = agregarPersonaASolicitud(id, p);
+    if (created) audit({ userId: req.user!.id, accion: 'PERSONA_CREADA', entidad: 'persona', entidadId: persona.id, ip: req.ip });
     recomputeSolicitudEstado(id);
     audit({ userId: req.user!.id, accion: 'SOLICITUD_PERSONA_AGREGADA', entidad: 'solicitud', entidadId: id, detalle: { personaId: persona.id }, ip: req.ip });
     return { personaId: persona.id };
@@ -301,12 +344,6 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     notifyRechazo(id, personaId, motivo).catch(() => {});
     return { ok: true };
   });
-}
-
-/** Placeholder para satisfacer personaId NOT NULL en solicitudes (primary contact). */
-function agregarPrimera(_p: { cuil: string; nombre: string; apellido: string }): number {
-  const { persona } = findOrCreatePersona({ cuil: normalizeCuil(_p.cuil), nombre: _p.nombre, apellido: _p.apellido });
-  return persona.id;
 }
 
 function setEstadoPersona(solicitudId: number, personaId: number, estado: string, userId: number, ip: string) {

@@ -123,7 +123,10 @@ CREATE INDEX IF NOT EXISTS docver_hash_idx ON document_versions(sha256);
 
 CREATE TABLE IF NOT EXISTS solicitudes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  persona_id INTEGER NOT NULL REFERENCES personas(id),
+  -- Contacto principal (legacy). Opcional: una solicitud puede nacer sin personas
+  -- (ej. un email sin Excel) y cargarse a mano después. Las personas reales
+  -- viven en solicitud_personas.
+  persona_id INTEGER REFERENCES personas(id),
   local_id INTEGER NOT NULL REFERENCES locales(id),
   email_message_id INTEGER REFERENCES email_messages(id),
   estado TEXT NOT NULL DEFAULT 'PENDIENTE',
