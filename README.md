@@ -102,6 +102,19 @@ con botón **Probar conexión**. Las contraseñas se guardan **cifradas** y no s
 Al guardar, el lector automático se **reinicia solo** con la frecuencia nueva (no hace falta reiniciar
 el sistema). En **Monitoreo** se ve si está corriendo, la última revisión y la próxima.
 
+### Locales
+
+Los locales no hace falta cargarlos de antemano: se crean solos cuando aparece uno nuevo.
+
+- **Desde un email**: el nombre sale del asunto (`Solicitud FAO (Local) …`). Se busca entre los
+  cargados con match aproximado (ignora mayúsculas y acentos, y acepta que el nombre venga con
+  texto alrededor); si no hay coincidencia, se crea.
+- **A mano**: en **Solicitudes → + Nueva solicitud** el campo *Local* se escribe libremente y
+  sugiere los ya cargados. Si escribís uno que no existe, se crea junto con la solicitud. La
+  comparación ignora mayúsculas, acentos y espacios de más, así que "pizza hut" reusa "Pizza Hut".
+
+Se pueden editar (nombre, email, estado) desde **Administración → Locales**.
+
 ## 7. Base de datos
 
 - Motor: **SQLite** (archivo `storage/data/sistema.db`).

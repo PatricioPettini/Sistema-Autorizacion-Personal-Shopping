@@ -10,6 +10,7 @@ import { extractZip } from './zip.js';
 import { findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
 import { getPlaceholderLocalId } from '../../db/migrate.js';
 import { parsePersonasExcel } from '../../lib/xlsx.js';
+import { findOrCreateLocal } from '../locales/service.js';
 import { recomputeSolicitudEstado } from '../solicitudes/service.js';
 
 interface FileItem {
@@ -19,10 +20,6 @@ interface FileItem {
 
 function setEmailEstado(emailId: number, estado: string, error?: string | null) {
   db.update(schema.emailMessages).set({ estado, error: error ?? null, updatedAt: nowIso() }).where(eq(schema.emailMessages.id, emailId)).run();
-}
-
-function norm(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
 
 /**
@@ -54,28 +51,12 @@ export function parseTipoFromSubject(asunto: string | null): 'EMPRESA' | 'MONOTR
 /**
  * Identifica el local declarado en el asunto. Si no coincide con ninguno cargado,
  * lo CREA automáticamente (el asunto es la fuente oficial del local).
+ * Match aproximado: el nombre del asunto puede traer texto alrededor.
  */
 function identifyLocal(asunto: string | null): number | null {
   const nombre = parseLocalFromSubject(asunto);
   if (!nombre) return null;
-  const t = norm(nombre);
-  const locales = db.select().from(schema.locales).all();
-  const match = locales
-    .filter((l) => l.nombre && l.nombre !== '(Sin asignar)' && (t.includes(norm(l.nombre)) || norm(l.nombre).includes(t)))
-    .sort((a, b) => b.nombre.length - a.nombre.length)[0];
-  if (match) return match.id;
-
-  // No existe un local que coincida: se crea a partir del asunto.
-  const nombreLocal = nombre.slice(0, 80);
-  try {
-    const creado = db.insert(schema.locales).values({ nombre: nombreLocal, estado: 'ACTIVO', observaciones: 'Creado automáticamente desde el asunto de un email.' }).returning().get();
-    audit({ accion: 'LOCAL_CREADO', entidad: 'local', entidadId: creado.id, detalle: { nombre: nombreLocal, origen: 'email' } });
-    return creado.id;
-  } catch {
-    // Si otro proceso lo creó en paralelo (UNIQUE), reusar el existente.
-    const ya = db.select().from(schema.locales).where(eq(schema.locales.nombre, nombreLocal)).get();
-    return ya?.id ?? null;
-  }
+  return findOrCreateLocal(nombre, { origen: 'email', aproximado: true })?.local.id ?? null;
 }
 
 function esExcel(filename: string, contentType?: string): boolean {

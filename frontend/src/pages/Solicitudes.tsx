@@ -12,7 +12,10 @@ const PLACEHOLDER_PEGADO = '20-30123456-7\tJuan Pérez\n27-12345678-4\tMaría G�
 const ESTADOS = ['', 'PENDIENTE', 'EN_REVISION', 'OBSERVADA', 'AUTORIZADA', 'RECHAZADA', 'REVOCADA'];
 interface FilaPersona { cuil: string; apellido: string; nombre: string; }
 const FILA_VACIA: FilaPersona = { cuil: '', apellido: '', nombre: '' };
-const VACIO = { localId: '', categoria: '', personas: [{ ...FILA_VACIA }] as FilaPersona[] };
+const VACIO = { local: '', categoria: '', personas: [{ ...FILA_VACIA }] as FilaPersona[] };
+
+/** Compara nombres de local ignorando mayúsculas, acentos y espacios de más. */
+const normLocal = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 
 export default function Solicitudes() {
   const [params, setParams] = useSearchParams();
@@ -46,6 +49,11 @@ export default function Solicitudes() {
 
   const cambiarEstado = (e: string) => { setEstado(e); setParams(e ? { estado: e } : {}); };
 
+  // El local se escribe libremente: si el texto coincide con uno cargado se reusa,
+  // si no, se crea al guardar (igual que hace el lector de emails con el asunto).
+  const localExistente = localesReales.find((l) => normLocal(l.nombre) === normLocal(form.local));
+  const localEsNuevo = !!form.local.trim() && !localExistente;
+
   // Filas de personas del formulario (una solicitud = un local + varias personas).
   const setFila = (i: number, campo: keyof FilaPersona, v: string) =>
     setForm({ ...form, personas: form.personas.map((p, j) => (j === i ? { ...p, [campo]: v } : p)) });
@@ -72,7 +80,8 @@ export default function Solicitudes() {
   };
 
   const crear = async () => {
-    if (!form.localId) { notify('Elegí el local.', 'error'); return; }
+    const nombreLocal = form.local.trim();
+    if (!nombreLocal) { notify('Elegí un local o escribí uno nuevo.', 'error'); return; }
     const personas = form.personas
       .map((p) => ({ cuil: p.cuil.replace(/\D/g, ''), nombre: p.nombre.trim(), apellido: p.apellido.trim() }))
       .filter((p) => p.cuil || p.nombre || p.apellido);
@@ -81,12 +90,15 @@ export default function Solicitudes() {
     if (mala >= 0) { notify(`Revisá la persona ${mala + 1}: falta el CUIL (11 dígitos) o el nombre.`, 'error'); return; }
     setBusy(true);
     try {
-      const r = await api.post<{ solicitudId: number; personas: number }>('/solicitudes/manual', {
-        localId: Number(form.localId),
+      // Si coincide con uno cargado se reusa; si no, el backend lo crea.
+      const r = await api.post<{ solicitudId: number; personas: number; local: { nombre: string; creado: boolean } }>('/solicitudes/manual', {
+        localId: localExistente?.id,
+        localNombre: localExistente ? undefined : nombreLocal,
         categoria: form.categoria || undefined,
         personas,
       });
-      notify(`Solicitud creada con ${r.personas} ${r.personas === 1 ? 'persona' : 'personas'}.`, 'success');
+      const cuantas = `${r.personas} ${r.personas === 1 ? 'persona' : 'personas'}`;
+      notify(r.local?.creado ? `Local "${r.local.nombre}" creado y solicitud cargada con ${cuantas}.` : `Solicitud creada con ${cuantas}.`, 'success');
       setNueva(false); setForm(VACIO); reload();
       nav(`/solicitudes/${r.solicitudId}`);
     } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(false); }
@@ -183,10 +195,16 @@ export default function Solicitudes() {
           <div className="alert info">Una solicitud es <strong>un local con una o varias personas</strong>. Cargá todas las que necesites. Si un CUIL ya existe, se usa esa persona (no se duplica).</div>
           <div className="form-row">
             <div className="field"><label>Local *</label>
-              <select value={form.localId} onChange={(e) => setForm({ ...form, localId: e.target.value })}>
-                <option value="">Elegir local…</option>
-                {localesReales.map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
-              </select>
+              <input list="locales-cargados" value={form.local} onChange={(e) => setForm({ ...form, local: e.target.value })}
+                placeholder="Elegí uno o escribí el nombre" autoComplete="off" />
+              <datalist id="locales-cargados">
+                {localesReales.map((l) => <option key={l.id} value={l.nombre} />)}
+              </datalist>
+              <div className="hint">
+                {localEsNuevo
+                  ? <>➕ No está cargado: se va a crear el local <strong>“{form.local.trim()}”</strong>.</>
+                  : localExistente ? <>✓ Local ya cargado.</> : <>Escribí para buscar entre los {localesReales.length} cargados, o poné uno nuevo.</>}
+              </div>
             </div>
             <div className="field"><label>Tipo de contratista</label>
               <select value={form.categoria} onChange={(e) => setForm({ ...form, categoria: e.target.value })}>
@@ -227,7 +245,7 @@ export default function Solicitudes() {
               <button className="btn sm" style={{ marginTop: 6 }} onClick={() => { pegarLista(pegado); setPegado(''); }}>Agregar a la lista</button>
             </div>
           )}
-          {localesReales.length === 0 && <div className="alert warn">No hay locales cargados. Pedile al Administrador que cree los locales en Administración → Locales.</div>}
+          {localesReales.length === 0 && <div className="alert info">Todavía no hay locales cargados. Escribí el nombre acá y se crea junto con la solicitud.</div>}
         </Modal>
       )}
     </>

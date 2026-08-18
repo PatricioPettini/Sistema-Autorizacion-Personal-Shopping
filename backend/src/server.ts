@@ -42,7 +42,10 @@ export async function buildServer() {
     }
     if (err instanceof ZodError) {
       const first = err.errors[0];
-      return reply.status(400).send({ error: first ? `${first.path.join('.')}: ${first.message}` : 'Datos inválidos.' });
+      if (!first) return reply.status(400).send({ error: 'Datos inválidos.' });
+      // Las validaciones a nivel objeto (refine) no tienen path: sin prefijo quedan legibles.
+      const campo = first.path.join('.');
+      return reply.status(400).send({ error: campo ? `${campo}: ${first.message}` : first.message });
     }
     // Errores de UNIQUE de SQLite, etc.
     const msg = (err as Error)?.message;

@@ -9,6 +9,7 @@ import { formatCuil, findOrCreatePersona, normalizeCuil, splitNombreCompleto } f
 import { getPersonaDocStatus } from '../documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona } from '../autorizaciones/service.js';
 import { recomputeSolicitudEstado, aggEstado, agruparPorEmail } from './service.js';
+import { findOrCreateLocal } from '../locales/service.js';
 import { notifyObservacion, notifyRechazo, notifyResultadoRevision } from '../notifications/service.js';
 
 const TIPOS = ['EMPRESA', 'MONOTRIBUTISTA'] as const;
@@ -25,13 +26,18 @@ const personaInput = z
   .refine((p) => !!(p.nombreCompleto?.trim() || p.nombre?.trim()), { message: 'Ingresá el nombre de la persona.' })
   .refine((p) => normalizeCuil(p.cuil).length >= 10, { message: 'CUIL inválido (11 dígitos).' });
 
-const manualSchema = z.object({
-  localId: z.number().int(),
-  // Puede venir vacío: la solicitud se crea y las personas se cargan después.
-  personas: z.array(personaInput).default([]),
-  // Tipo de contratista para todo el grupo (define qué documentación se exige).
-  categoria: z.enum(TIPOS).optional(),
-});
+const manualSchema = z
+  .object({
+    // El local se elige de los cargados (localId) o se escribe uno nuevo (localNombre),
+    // que se crea en el momento. Igual que hace el lector de emails con el asunto.
+    localId: z.number().int().optional(),
+    localNombre: z.string().optional(),
+    // Puede venir vacío: la solicitud se crea y las personas se cargan después.
+    personas: z.array(personaInput).default([]),
+    // Tipo de contratista para todo el grupo (define qué documentación se exige).
+    categoria: z.enum(TIPOS).optional(),
+  })
+  .refine((d) => d.localId != null || !!d.localNombre?.trim(), { message: 'Elegí o escribí un local.' });
 
 type PersonaInputParsed = z.infer<typeof personaInput>;
 
@@ -200,8 +206,19 @@ export async function solicitudesRoutes(app: FastifyInstance) {
   // Crear solicitud a mano: un local + una o más personas (por CUIL).
   app.post('/manual', soloAdmin, async (req) => {
     const data = manualSchema.parse(req.body);
-    const local = db.select().from(schema.locales).where(eq(schema.locales.id, data.localId)).get();
-    if (!local) throw badRequest('Local inexistente.');
+
+    // Local existente por id, o uno nuevo a partir del nombre escrito.
+    let local: typeof schema.locales.$inferSelect | undefined;
+    let localCreado = false;
+    if (data.localId != null) {
+      local = db.select().from(schema.locales).where(eq(schema.locales.id, data.localId)).get();
+      if (!local) throw badRequest('Local inexistente.');
+    } else {
+      const r = findOrCreateLocal(data.localNombre!, { origen: 'manual', userId: req.user!.id, ip: req.ip });
+      if (!r) throw badRequest('Nombre de local inválido.');
+      local = r.local;
+      localCreado = r.created;
+    }
 
     // CUILs repetidos dentro del mismo formulario: se cargan una sola vez.
     const vistos = new Set<string>();
@@ -209,14 +226,14 @@ export async function solicitudesRoutes(app: FastifyInstance) {
       .map((p) => normalizarPersona(p, data.categoria))
       .filter((p) => (vistos.has(p.cuil) ? false : (vistos.add(p.cuil), true)));
 
-    const sol = db.insert(schema.solicitudes).values({ localId: data.localId, estado: 'PENDIENTE', createdByUserId: req.user!.id }).returning().get();
+    const sol = db.insert(schema.solicitudes).values({ localId: local.id, estado: 'PENDIENTE', createdByUserId: req.user!.id }).returning().get();
     for (const p of personas) {
       const { persona, created } = agregarPersonaASolicitud(sol.id, p);
       if (created) audit({ userId: req.user!.id, accion: 'PERSONA_CREADA', entidad: 'persona', entidadId: persona.id, ip: req.ip });
     }
     recomputeSolicitudEstado(sol.id);
-    audit({ userId: req.user!.id, accion: 'SOLICITUD_CREADA_MANUAL', entidad: 'solicitud', entidadId: sol.id, detalle: { personas: personas.length, categoria: data.categoria }, ip: req.ip });
-    return { solicitudId: sol.id, personas: personas.length };
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_CREADA_MANUAL', entidad: 'solicitud', entidadId: sol.id, detalle: { personas: personas.length, categoria: data.categoria, localId: local.id, localCreado }, ip: req.ip });
+    return { solicitudId: sol.id, personas: personas.length, local: { id: local.id, nombre: local.nombre, creado: localCreado } };
   });
 
   // Agregar una persona a una solicitud existente.
