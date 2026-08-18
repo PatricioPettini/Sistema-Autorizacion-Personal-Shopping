@@ -10,11 +10,14 @@ Con esto el sistema queda accesible desde internet con una **URL fija** (siempre
 
 ## Configuración (una sola vez)
 
-### 1) Crear la cuenta y el dominio en ngrok (gratis)
+### 1) Cuenta y dominio en ngrok (gratis)
 1. Entrá a **https://dashboard.ngrok.com** y creá una cuenta gratis (o iniciá sesión).
 2. En el menú **"Your Authtoken"** → copiá el **AUTHTOKEN** (una cadena larga).
-3. En el menú **"Domains"** → **"+ New Domain"** (o "Create Domain") → te da un dominio fijo gratis
-   tipo **`algo-random.ngrok-free.app`**. Copialo.
+3. En el menú **"Domains"** → **NO crees uno nuevo** (el plan gratis pide upgrade para eso).
+   Usá el **dominio "dev" que ya viene asignado** en la lista, tipo
+   **`algo-algo.ngrok-free.dev`**. Copialo tal cual (con `.ngrok-free.dev`).
+
+> El script NO necesita administrador. Si Windows lo bloquea, ver el paso 2.
 
 ### 2) Ejecutar el configurador
 1. Entrá a la carpeta `produccion`.

@@ -33,19 +33,24 @@ Set sh = CreateObject("WScript.Shell")
 sh.Run "ngrok http --url=https://$domain 4000", 0, False
 "@ | Set-Content -Path $ngrokVbs -Encoding ASCII
 
-# 3) Tareas que arrancan solas al iniciar sesion
-$trigger  = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName "SAP-Servidor" -Force -Trigger $trigger -Settings $settings `
-  -Action (New-ScheduledTaskAction -Execute "wscript.exe" -Argument ('"' + $appVbs + '"')) | Out-Null
-Register-ScheduledTask -TaskName "SAP-Ngrok" -Force -Trigger $trigger -Settings $settings `
-  -Action (New-ScheduledTaskAction -Execute "wscript.exe" -Argument ('"' + $ngrokVbs + '"')) | Out-Null
+# 3) Auto-inicio: copiar los lanzadores a la carpeta de Inicio de Windows.
+#    (Arrancan solos al iniciar sesion; NO requiere permisos de administrador.)
+$startup = [Environment]::GetFolderPath('Startup')
+Copy-Item $appVbs   (Join-Path $startup 'SAP-Servidor.vbs') -Force
+Copy-Item $ngrokVbs (Join-Path $startup 'SAP-Ngrok.vbs') -Force
 
 Write-Host ""
-Write-Host "Auto-inicio configurado (tareas 'SAP-Servidor' y 'SAP-Ngrok')." -ForegroundColor Green
-Write-Host "Arrancando el tunel ahora..."
+Write-Host "Auto-inicio configurado (carpeta de Inicio de Windows)." -ForegroundColor Green
+Write-Host "Arrancando ahora..."
+# Servidor: solo si no esta ya corriendo en el puerto 4000.
+$appUp = $false
+try { $appUp = (Test-NetConnection 127.0.0.1 -Port 4000 -WarningAction SilentlyContinue).TcpTestSucceeded } catch {}
+if (-not $appUp) { Start-Process wscript.exe -ArgumentList ('"' + $appVbs + '"'); Start-Sleep -Seconds 8 }
+# Tunel: matar cualquier ngrok previo (limite de 1 sesion gratis) y arrancar.
+Get-Process ngrok -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 2
 Start-Process wscript.exe -ArgumentList ('"' + $ngrokVbs + '"')
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 5
 Write-Host ""
 Write-Host "===================================================" -ForegroundColor Green
 Write-Host "  URL PUBLICA:  https://$domain" -ForegroundColor Green
