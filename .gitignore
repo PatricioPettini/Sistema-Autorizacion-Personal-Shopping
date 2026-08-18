@@ -14,7 +14,7 @@ backend/dist/
 !.env.example
 
 # Base de datos y almacenamiento reales
-storage/
+/storage/
 data/
 *.db
 *.db-shm
