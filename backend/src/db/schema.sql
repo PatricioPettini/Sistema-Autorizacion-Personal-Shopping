@@ -141,9 +141,9 @@ CREATE TABLE IF NOT EXISTS solicitudes (
 );
 CREATE INDEX IF NOT EXISTS sol_estado_idx ON solicitudes(estado);
 CREATE INDEX IF NOT EXISTS sol_persona_idx ON solicitudes(persona_id);
--- Varias solicitudes del mismo email comparten numero, pero no puede repetirse entre grupos.
--- (En SQLite un indice UNIQUE admite muchos NULL, que es lo que queremos.)
-CREATE INDEX IF NOT EXISTS sol_nro_orden_idx ON solicitudes(nro_orden);
+-- OJO: el indice de nro_orden NO va aca. En una base ya creada, el CREATE TABLE de arriba
+-- es un no-op (la tabla existe sin la columna) pero el CREATE INDEX se ejecuta igual y falla.
+-- Lo crea migrateColumns(), despues de agregar la columna con ALTER TABLE.
 
 CREATE TABLE IF NOT EXISTS solicitud_personas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
