@@ -180,12 +180,19 @@ export const solicitudes = sqliteTable(
     // Fecha de vencimiento ÚNICA de la solicitud (YYYY-MM-DD): hasta cuándo pueden ingresar
     // las personas autorizadas de esta solicitud. La carga el admin en la revisión.
     fechaVencimiento: text('fecha_vencimiento'),
+    // Número de orden de la revisión (OA-AAAA-NNNN). Se genera al terminar la revisión
+    // y lo comparten todas las solicitudes del mismo email. NULL hasta entonces.
+    nroOrden: text('nro_orden'),
     motivoRechazo: text('motivo_rechazo'),
     createdByUserId: integer('created_by_user_id').references(() => users.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => ({ estadoIdx: index('sol_estado_idx').on(t.estado), personaIdx: index('sol_persona_idx').on(t.personaId) }),
+  (t) => ({
+    estadoIdx: index('sol_estado_idx').on(t.estado),
+    personaIdx: index('sol_persona_idx').on(t.personaId),
+    nroOrdenIdx: index('sol_nro_orden_idx').on(t.nroOrden),
+  }),
 );
 
 // Personas incluidas en una solicitud (una solicitud = un local = varias personas).

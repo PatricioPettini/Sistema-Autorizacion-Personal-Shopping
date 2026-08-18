@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS solicitudes (
   email_message_id INTEGER REFERENCES email_messages(id),
   estado TEXT NOT NULL DEFAULT 'PENDIENTE',
   fecha_vencimiento TEXT,
+  -- Numero de orden de la revision (formato OA-AAAA-NNNN). Se genera al terminar la
+  -- revision y lo comparten todas las solicitudes del mismo email. NULL hasta entonces.
+  nro_orden TEXT,
   motivo_rechazo TEXT,
   created_by_user_id INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -138,6 +141,9 @@ CREATE TABLE IF NOT EXISTS solicitudes (
 );
 CREATE INDEX IF NOT EXISTS sol_estado_idx ON solicitudes(estado);
 CREATE INDEX IF NOT EXISTS sol_persona_idx ON solicitudes(persona_id);
+-- Varias solicitudes del mismo email comparten numero, pero no puede repetirse entre grupos.
+-- (En SQLite un indice UNIQUE admite muchos NULL, que es lo que queremos.)
+CREATE INDEX IF NOT EXISTS sol_nro_orden_idx ON solicitudes(nro_orden);
 
 CREATE TABLE IF NOT EXISTS solicitud_personas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -6,7 +6,7 @@ import { findOrCreatePersona } from '../modules/personas/service.js';
 import { saveDocumentVersion } from '../modules/storage/service.js';
 import { getPersonaDocStatus } from '../modules/documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona } from '../modules/autorizaciones/service.js';
-import { recomputeSolicitudEstado } from '../modules/solicitudes/service.js';
+import { recomputeSolicitudEstado, asignarNroOrden, getNroOrden } from '../modules/solicitudes/service.js';
 import { todayLocal } from '../lib/datetime.js';
 
 function tipoId(codigo: string): number {
@@ -143,6 +143,42 @@ describe('solicitud sin Excel de personas', () => {
     const n = db.select().from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, sol.id)).all().length;
     expect(n).toBe(2);
     expect(recomputeSolicitudEstado(sol.id)).toBe('PENDIENTE');
+  });
+});
+
+describe('número de orden', () => {
+  const localDe = (n: string) => db.insert(schema.locales).values({ nombre: `${n} ${Date.now()}${Math.trunc(performance.now() * 1000) % 1000}`, estado: 'ACTIVO' }).returning().get();
+
+  it('se genera con formato OA-AAAA-NNNN y es correlativo', () => {
+    const a = asignarNroOrden(db.insert(schema.solicitudes).values({ localId: localDe('L').id, estado: 'PENDIENTE' }).returning().get().id)!;
+    const b = asignarNroOrden(db.insert(schema.solicitudes).values({ localId: localDe('L').id, estado: 'PENDIENTE' }).returning().get().id)!;
+    const anio = new Date().getFullYear();
+    expect(a).toMatch(new RegExp(`^OA-${anio}-\\d{4}$`));
+    expect(Number(b.split('-')[2])).toBe(Number(a.split('-')[2]) + 1);
+  });
+
+  it('es idempotente: reenviar el resultado no cambia el número', () => {
+    const sol = db.insert(schema.solicitudes).values({ localId: localDe('L').id, estado: 'PENDIENTE' }).returning().get();
+    const primero = asignarNroOrden(sol.id);
+    expect(asignarNroOrden(sol.id)).toBe(primero);
+    expect(getNroOrden(sol.id)).toBe(primero);
+  });
+
+  it('todas las solicitudes del mismo email comparten el número', () => {
+    const local = localDe('L');
+    const email = db.insert(schema.emailMessages).values({ messageId: `<orden-${Date.now()}>`, estado: 'PROCESSED' }).returning().get();
+    const s1 = db.insert(schema.solicitudes).values({ localId: local.id, emailMessageId: email.id, estado: 'PENDIENTE' }).returning().get();
+    const s2 = db.insert(schema.solicitudes).values({ localId: local.id, emailMessageId: email.id, estado: 'PENDIENTE' }).returning().get();
+    const nro = asignarNroOrden(s1.id);
+    expect(getNroOrden(s2.id)).toBe(nro);
+    // Pedirlo desde la hermana tampoco genera uno nuevo.
+    expect(asignarNroOrden(s2.id)).toBe(nro);
+  });
+
+  it('no lo tiene hasta que se termina la revisión', () => {
+    const sol = db.insert(schema.solicitudes).values({ localId: localDe('L').id, estado: 'PENDIENTE' }).returning().get();
+    expect(sol.nroOrden).toBeNull();
+    expect(getNroOrden(sol.id)).toBeNull();
   });
 });
 

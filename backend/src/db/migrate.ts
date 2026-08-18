@@ -26,6 +26,10 @@ function ensureColumn(table: string, column: string, definition: string): void {
   }
 }
 
+function ensureIndex(sql: string): void {
+  rawDb.exec(sql);
+}
+
 function migrateColumns(): void {
   ensureColumn('documentos', 'verificacion', "TEXT NOT NULL DEFAULT 'PENDIENTE'");
   ensureColumn('documentos', 'verificado_por_user_id', 'INTEGER');
@@ -39,6 +43,8 @@ function migrateColumns(): void {
   ensureColumn('autorizaciones', 'fecha_hasta', 'TEXT');
   ensureColumn('documentos', 'fecha_vencimiento', 'TEXT');
   ensureColumn('solicitudes', 'fecha_vencimiento', 'TEXT'); // vencimiento único de la solicitud
+  ensureColumn('solicitudes', 'nro_orden', 'TEXT'); // número de orden de la revisión
+  ensureIndex('CREATE INDEX IF NOT EXISTS sol_nro_orden_idx ON solicitudes(nro_orden)');
 }
 
 /**
@@ -62,17 +68,19 @@ function migrateSolicitudPersonaIdOpcional(): void {
       email_message_id INTEGER REFERENCES email_messages(id),
       estado TEXT NOT NULL DEFAULT 'PENDIENTE',
       fecha_vencimiento TEXT,
+      nro_orden TEXT,
       motivo_rechazo TEXT,
       created_by_user_id INTEGER REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
-    INSERT INTO solicitudes__new (id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, motivo_rechazo, created_by_user_id, created_at, updated_at)
-      SELECT id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, motivo_rechazo, created_by_user_id, created_at, updated_at FROM solicitudes;
+    INSERT INTO solicitudes__new (id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, nro_orden, motivo_rechazo, created_by_user_id, created_at, updated_at)
+      SELECT id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, nro_orden, motivo_rechazo, created_by_user_id, created_at, updated_at FROM solicitudes;
     DROP TABLE solicitudes;
     ALTER TABLE solicitudes__new RENAME TO solicitudes;
     CREATE INDEX IF NOT EXISTS sol_estado_idx ON solicitudes(estado);
     CREATE INDEX IF NOT EXISTS sol_persona_idx ON solicitudes(persona_id);
+    CREATE INDEX IF NOT EXISTS sol_nro_orden_idx ON solicitudes(nro_orden);
     COMMIT;
     PRAGMA foreign_keys = ON;
   `);

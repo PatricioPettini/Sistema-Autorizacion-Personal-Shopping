@@ -8,7 +8,7 @@ import { nowIso } from '../../lib/datetime.js';
 import { formatCuil, findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
 import { getPersonaDocStatus } from '../documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona } from '../autorizaciones/service.js';
-import { recomputeSolicitudEstado, aggEstado, agruparPorEmail } from './service.js';
+import { recomputeSolicitudEstado, aggEstado, agruparPorEmail, asignarNroOrden } from './service.js';
 import { findOrCreateLocal } from '../locales/service.js';
 import { notifyObservacion, notifyRechazo, notifyResultadoRevision } from '../notifications/service.js';
 
@@ -81,6 +81,7 @@ export async function solicitudesRoutes(app: FastifyInstance) {
         id: schema.solicitudes.id,
         estado: schema.solicitudes.estado,
         updatedAt: schema.solicitudes.updatedAt,
+        nroOrden: schema.solicitudes.nroOrden,
         localId: schema.locales.id,
         local: schema.locales.nombre,
         emailMessageId: schema.solicitudes.emailMessageId,
@@ -111,7 +112,7 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     if (q.hasta) list = list.filter((x) => (x.fecha ?? '').slice(0, 10) <= String(q.hasta));
     const term = String(q.q ?? '').trim().toLowerCase();
     const termDigits = term.replace(/\D/g, '');
-    if (term) list = list.filter((x) => x.personasLabel.toLowerCase().includes(term) || (!!termDigits && x.cuils.includes(termDigits)));
+    if (term) list = list.filter((x) => x.personasLabel.toLowerCase().includes(term) || (x.nroOrden ?? '').toLowerCase().includes(term) || (!!termDigits && x.cuils.includes(termDigits)));
     return list.map(({ cuils, ...x }) => x);
   });
 
@@ -320,10 +321,14 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     const id = Number((req.params as any).id);
     const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
     if (!sol) throw notFound('Solicitud no encontrada.');
+    // El número se asigna al cerrar la revisión, aunque el email no se pueda enviar:
+    // identifica la revisión igual. Si ya tenía uno (reenvío), se conserva.
+    const nroOrden = asignarNroOrden(id);
     const res = await notifyResultadoRevision(id);
-    audit({ userId: req.user!.id, accion: 'REVISION_TERMINADA', entidad: 'solicitud', entidadId: id, detalle: { emailEnviado: res.enviado, to: res.to }, ip: req.ip });
+    audit({ userId: req.user!.id, accion: 'REVISION_TERMINADA', entidad: 'solicitud', entidadId: id, detalle: { emailEnviado: res.enviado, to: res.to, nroOrden }, ip: req.ip });
     return {
       ok: true,
+      nroOrden,
       emailEnviado: res.enviado,
       to: res.to,
       motivo: res.enviado ? null : (res.to ? 'No se pudo enviar el email (revisá la configuración de SMTP).' : 'El correo original no tiene un remitente para responderle.'),

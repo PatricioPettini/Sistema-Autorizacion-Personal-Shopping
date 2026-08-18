@@ -120,7 +120,8 @@ Se pueden editar (nombre, email, estado) desde **Administración → Locales**.
 - Motor: **SQLite** (archivo `storage/data/sistema.db`).
 - El esquema se crea/actualiza solo al iniciar (`CREATE TABLE IF NOT EXISTS`, idempotente).
 - Entidades principales: `users`, `locales`, `personas` (identificadas por **CUIL**), `document_types`,
-  `documentos`, `document_versions`, `email_messages`, `processing_jobs`, `solicitudes`,
+  `documentos`, `document_versions`, `email_messages`, `processing_jobs`, `solicitudes`
+  (con el **número de orden** de la revisión),
   `solicitud_personas` (las **varias personas** de una solicitud), `autorizaciones`, `entradas`,
   `comentarios`, `audit_log`, `settings`.
 
@@ -180,6 +181,22 @@ Según el tipo declarado en el asunto, a cada persona se le exige:
   panel (contador *Vencimientos*) y en **Reportes → Vencimientos**.
 - Solo se puede **autorizar** a una persona cuando **todos sus requisitos obligatorios están aprobados y vigentes**.
 
+### Número de orden
+
+Al tocar **Terminar revisión**, la solicitud recibe un **número de orden** con formato
+`OA-AAAA-NNNN` (por ejemplo `OA-2026-0001`), con secuencia propia por año.
+
+- Se genera **una sola vez**: si se reenvía el email de resultado, el número no cambia.
+- Todas las solicitudes del **mismo email** comparten el número, porque el remitente recibe
+  una sola respuesta por su correo.
+- Va en el **asunto** y en el **cuerpo** del email de resultado, para que el local pueda citarlo.
+- Se muestra en el detalle de la solicitud y en la columna *Orden* del listado, y el buscador
+  encuentra por número.
+- Se asigna aunque el email no se pueda enviar (SMTP mal configurado, remitente sin dirección):
+  la revisión queda identificada igual.
+
+> La sigla se cambia en `PREFIJO_ORDEN`, en `backend/src/modules/solicitudes/service.ts`.
+
 ## 10. Ejecución
 
 ```bash
@@ -195,7 +212,8 @@ npm test
 Cubren seguridad de archivos (ZIP Slip, extensiones), lectura del Excel de personas,
 no-duplicación de personas por **CUIL**, verificación manual de documentación (un requisito solo
 cuenta como cumplido al verificarlo), versionado de documentos, solicitudes creadas sin personas
-(email sin Excel) y vigencia de autorizaciones por **rango de fechas**.
+(email sin Excel), generación del **número de orden** (correlativo por año, idempotente y
+compartido por el grupo del email) y vigencia de autorizaciones por **rango de fechas**.
 
 ## 12. Backups
 

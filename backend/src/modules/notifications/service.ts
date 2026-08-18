@@ -4,6 +4,7 @@ import { sendMail } from '../email/mailer.js';
 import { formatCuil } from '../personas/service.js';
 import { getPersonaDocStatus } from '../documentos/service.js';
 import { audit } from '../../lib/audit.js';
+import { todayLocal } from '../../lib/datetime.js';
 
 /** Extrae la dirección de un "Nombre <addr@dom>" o devuelve el texto si ya es una dirección. */
 function extraerEmail(remitente: string | null | undefined): string {
@@ -82,10 +83,11 @@ ${aut.comentario ? `\nComentario: ${aut.comentario}` : ''}`;
 /**
  * Email de cierre de revisión al REMITENTE del correo original: resume, por persona, si quedó
  * autorizada (con la fecha hasta la que puede ingresar) o no (con la documentación faltante).
+ * Lleva el número de orden del grupo (lo genera la ruta antes de llamar acá).
  */
-export async function notifyResultadoRevision(solicitudId: number): Promise<{ enviado: boolean; to: string }> {
+export async function notifyResultadoRevision(solicitudId: number): Promise<{ enviado: boolean; to: string; nroOrden: string | null }> {
   const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, solicitudId)).get();
-  if (!sol) return { enviado: false, to: '' };
+  if (!sol) return { enviado: false, to: '', nroOrden: null };
 
   // Grupo del email (todas las solicitudes del mismo correo).
   const hermanas = sol.emailMessageId != null
@@ -95,7 +97,8 @@ export async function notifyResultadoRevision(solicitudId: number): Promise<{ en
 
   const email = sol.emailMessageId ? db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, sol.emailMessageId)).get() : null;
   const to = extraerEmail(email?.remitente);
-  if (!to) return { enviado: false, to: '' };
+  const nroOrden = hermanas.find((s) => s.nroOrden)?.nroOrden ?? null;
+  if (!to) return { enviado: false, to: '', nroOrden };
 
   const localesGrupo = db.select().from(schema.locales).where(inArray(schema.locales.id, [...new Set(hermanas.map((s) => s.localId))])).all();
   const local = localesGrupo.find((l) => l.nombre !== '(Sin asignar)') ?? localesGrupo[0];
@@ -115,20 +118,25 @@ export async function notifyResultadoRevision(solicitudId: number): Promise<{ en
   const lineas = sps.map((p) => {
     const nom = `${p.apellido}, ${p.nombre} (CUIL ${formatCuil(p.cuil ?? '')})`;
     if (p.estado === 'AUTORIZADA') return `✓ ${nom}\n   AUTORIZADO — ${venc ? `puede ingresar hasta el ${fmtFechaCorta(venc)}` : 'puede ingresar (sin fecha de vencimiento definida)'}.`;
-    if (p.estado === 'RECHAZADA') return `✗ ${nom}\n   RECHAZADO${p.motivoRechazo ? ` — ${p.motivoRechazo}` : ''}.`;
+    // El motivo lo escribe una persona y suele venir con punto final: no duplicarlo.
+    const motivo = p.motivoRechazo?.trim().replace(/\.+$/, '');
+    if (p.estado === 'RECHAZADA') return `✗ ${nom}\n   RECHAZADO${motivo ? ` — ${motivo}` : ''}.`;
     const faltantes = getPersonaDocStatus(p.personaId).faltantes;
     return `• ${nom}\n   PENDIENTE — falta: ${faltantes.length ? faltantes.join(', ') : 'documentación por revisar'}.`;
   });
 
   const texto = `Resultado de la revisión de la documentación enviada.
 
-Local: ${local?.nombre ?? '-'}
+${nroOrden ? `Número de orden: ${nroOrden}\n` : ''}Local: ${local?.nombre ?? '-'}
+Fecha: ${fmtFechaCorta(todayLocal())}
 
 ${lineas.join('\n\n')}
 
-Por las personas que figuran como PENDIENTE, enviar la documentación faltante para completar la autorización.`;
+Por las personas que figuran como PENDIENTE, enviar la documentación faltante para completar la autorización.${nroOrden ? `\n\nCitar el número de orden ${nroOrden} en cualquier consulta sobre esta solicitud.` : ''}`;
 
-  const enviado = await sendMail({ to, subject: `Resultado de la revisión — ${local?.nombre ?? 'Ingreso de personal'}`, text: texto });
-  if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'solicitud', entidadId: solicitudId, detalle: { tipo: 'RESULTADO_REVISION', to } });
-  return { enviado, to };
+  const asuntoLocal = local?.nombre ?? 'Ingreso de personal';
+  const subject = nroOrden ? `Orden ${nroOrden} — Resultado de la revisión — ${asuntoLocal}` : `Resultado de la revisión — ${asuntoLocal}`;
+  const enviado = await sendMail({ to, subject, text: texto });
+  if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'solicitud', entidadId: solicitudId, detalle: { tipo: 'RESULTADO_REVISION', to, nroOrden } });
+  return { enviado, to, nroOrden };
 }

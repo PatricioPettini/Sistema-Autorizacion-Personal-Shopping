@@ -32,7 +32,7 @@ export default function SolicitudDetalle() {
 
   const [revisando, setRevisando] = useState(false);
   const [confirmarTerminar, setConfirmarTerminar] = useState(false);
-  const [resultado, setResultado] = useState<{ emailEnviado: boolean; to: string; motivo: string | null } | null>(null);
+  const [resultado, setResultado] = useState<{ nroOrden: string | null; emailEnviado: boolean; to: string; motivo: string | null } | null>(null);
   const [venc, setVenc] = useState('');
   const [accion, setAccion] = useState<AccionModal | null>(null);
   const [comentario, setComentario] = useState('');
@@ -73,7 +73,7 @@ export default function SolicitudDetalle() {
   const terminarRevision = async () => {
     setBusy(true);
     try {
-      const r = await api.post<{ emailEnviado: boolean; to: string; motivo: string | null }>(`/solicitudes/${solicitud.id}/terminar-revision`);
+      const r = await api.post<{ nroOrden: string | null; emailEnviado: boolean; to: string; motivo: string | null }>(`/solicitudes/${solicitud.id}/terminar-revision`);
       setConfirmarTerminar(false);
       setResultado(r);
       reload();
@@ -149,6 +149,7 @@ export default function SolicitudDetalle() {
           <a className="muted" onClick={() => nav('/solicitudes')} style={{ cursor: 'pointer' }}>← Solicitudes</a>
           <h1 style={{ marginTop: 6 }}>{sinLocal ? <span className="badge orange">Local sin asignar</span> : local.nombre}</h1>
           <div className="subtitle">
+            {solicitud.nroOrden && <><span className="chip" title="Número de orden de la revisión">Orden {solicitud.nroOrden}</span>{' · '}</>}
             {personas.length} {personas.length === 1 ? 'persona' : 'personas'}
             {' · '}Tipo: <strong>{tipoLabel(tipoSolicitud)}</strong>
             {' · '}<Badge estado={solicitud.estado} />
@@ -293,6 +294,12 @@ export default function SolicitudDetalle() {
       {resultado && (
         <Modal title="Revisión terminada" onClose={() => setResultado(null)}
           footer={<button className="btn primary" onClick={() => setResultado(null)}>Cerrar</button>}>
+          {resultado.nroOrden && (
+            <div className="alert info" style={{ fontSize: 15 }}>
+              Número de orden: <strong>{resultado.nroOrden}</strong>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>Identifica esta revisión. Va en el asunto y en el cuerpo del email, y no cambia si reenviás.</div>
+            </div>
+          )}
           {resultado.emailEnviado
             ? <div className="alert success">✅ Email de resultado enviado a <strong>{resultado.to}</strong>.</div>
             : <div className="alert warn">No se envió el email: {resultado.motivo}<br /><span className="muted" style={{ fontSize: 12.5 }}>La revisión quedó guardada igual. Podés reenviar cuando el email esté configurado.</span></div>}

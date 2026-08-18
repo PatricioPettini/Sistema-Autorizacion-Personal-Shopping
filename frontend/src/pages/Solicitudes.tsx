@@ -5,7 +5,7 @@ import { Badge, Spinner, Modal, useToast } from '../ui';
 import { api, fmtFecha, tipoLabel, hoy } from '../api';
 import { useAuth } from '../auth';
 
-interface Row { id: number; estado: string; updatedAt: string; fecha: string | null; local: string; localId: number; emailAsunto: string | null; personasCount: number; personasLabel: string; tipo: string | null; }
+interface Row { id: number; estado: string; updatedAt: string; fecha: string | null; local: string; localId: number; emailAsunto: string | null; personasCount: number; personasLabel: string; tipo: string | null; nroOrden: string | null; }
 interface Local { id: number; nombre: string; }
 
 const PLACEHOLDER_PEGADO = '20-30123456-7\tJuan Pérez\n27-12345678-4\tMaría Gómez';
@@ -157,8 +157,8 @@ export default function Solicitudes() {
             </div>
           </div>
           <div className="field" style={{ margin: 0, flex: 1, minWidth: 180 }}>
-            <label>Buscar persona / CUIL</label>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nombre o CUIL" />
+            <label>Buscar persona / CUIL / orden</label>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nombre, CUIL o N° de orden" />
           </div>
         </div>
       </div>
@@ -167,11 +167,12 @@ export default function Solicitudes() {
         <div className="table-wrap">
           {loading ? <div className="card-body"><Spinner /></div> : (
             <table className="tbl">
-              <thead><tr><th>Local</th><th>Tipo</th><th>Personas</th><th>Estado</th><th>Enviado</th><th>Actualizado</th></tr></thead>
+              <thead><tr><th>Orden</th><th>Local</th><th>Tipo</th><th>Personas</th><th>Estado</th><th>Enviado</th><th>Actualizado</th></tr></thead>
               <tbody>
-                {data?.length === 0 && <tr><td colSpan={6} className="empty">No hay solicitudes con esos filtros.</td></tr>}
+                {data?.length === 0 && <tr><td colSpan={7} className="empty">No hay solicitudes con esos filtros.</td></tr>}
                 {data?.map((r) => (
                   <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/solicitudes/${r.id}`)}>
+                    <td>{r.nroOrden ? <span className="chip">{r.nroOrden}</span> : <span className="muted">—</span>}</td>
                     <td><strong>{r.local === '(Sin asignar)' ? <span className="badge orange">Sin asignar</span> : r.local}</strong></td>
                     <td>{r.tipo ? <span className="chip">{tipoLabel(r.tipo)}</span> : <span className="muted">—</span>}</td>
                     <td>
