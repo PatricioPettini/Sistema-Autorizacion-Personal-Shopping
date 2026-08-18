@@ -5,9 +5,13 @@ Guía pensada para instalar el sistema en la PC de trabajo (no hace falta saber 
 ## Paso 1 — Instalar Node.js
 
 1. Entrá a https://nodejs.org/es
-2. Descargá la versión **LTS** (botón de la izquierda).
+2. Descargá la versión **LTS** (botón de la izquierda). Sirven Node **20, 22 o 24**.
 3. Instalala con las opciones por defecto (Siguiente → Siguiente → Instalar).
 4. Reiniciá la PC si el instalador lo pide.
+
+> Si ya tenés otra versión de Node y al iniciar aparece un error que dice
+> *"Could not locate the bindings file"*, instalá una de las versiones de arriba,
+> borrá la carpeta `node_modules` y volvé a ejecutar `Instalar.bat`.
 
 ## Paso 2 — Copiar el sistema
 

@@ -48,7 +48,11 @@ Navegador (React)  ──HTTP──▶  Backend (Fastify / Node.js)
 ## 3. Requisitos
 
 - **Windows 10 u 11**.
-- **Node.js 20 o superior** (LTS). Descarga: https://nodejs.org/es
+- **Node.js 20, 22 o 24** (LTS). Descarga: https://nodejs.org/es
+  > Fuera de ese rango, `better-sqlite3` no tiene binario precompilado y npm intenta
+  > compilarlo, lo que requiere Visual Studio Build Tools. Si al iniciar aparece
+  > *"Could not locate the bindings file"*, es esto: instalá una de esas versiones de Node,
+  > borrá `node_modules` y volvé a ejecutar `Instalar.bat`.
 - ~500 MB de disco (más lo que ocupe la documentación).
 - (Opcional) Conexión a Internet **solo la primera vez** para descargar los datos de OCR en español.
 
@@ -208,6 +212,7 @@ backups anteriores.
 | Problema | Solución |
 |---|---|
 | "No se encontró Node.js" | Instalar Node.js LTS desde nodejs.org y reabrir `Instalar.bat`. |
+| "Could not locate the bindings file" | La versión de Node no es compatible con `better-sqlite3`. Instalá Node **20, 22 o 24**, borrá `node_modules` y volvé a correr `Instalar.bat`. |
 | El puerto 4000 está ocupado | Cambiar `PORT` en `.env`. |
 | No lee emails | Revisar credenciales IMAP y usar contraseña de aplicación; probar conexión desde la app. |
 | El email quedó en ERROR | No se pudo leer el email guardado o falló el procesamiento. Ver el detalle en Monitoreo. |

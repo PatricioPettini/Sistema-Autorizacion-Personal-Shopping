@@ -19,9 +19,9 @@
     "ocr:download": "node scripts/descargar-ocr.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x || 22.x || 23.x || 24.x"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "~12.4.1"
   }
 }
