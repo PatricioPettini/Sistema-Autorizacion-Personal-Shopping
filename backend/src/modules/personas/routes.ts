@@ -92,6 +92,23 @@ export async function personasRoutes(app: FastifyInstance) {
       .limit(50)
       .all();
 
+    // Solicitudes donde participa (para linkear a la revisión, que es donde se autoriza).
+    const solicitudes = db
+      .select({
+        solicitudId: schema.solicitudPersonas.solicitudId,
+        estadoPersona: schema.solicitudPersonas.estado,
+        estado: schema.solicitudes.estado,
+        nroOrden: schema.solicitudes.nroOrden,
+        fechaVencimiento: schema.solicitudes.fechaVencimiento,
+        local: schema.locales.nombre,
+      })
+      .from(schema.solicitudPersonas)
+      .innerJoin(schema.solicitudes, eq(schema.solicitudPersonas.solicitudId, schema.solicitudes.id))
+      .innerJoin(schema.locales, eq(schema.solicitudes.localId, schema.locales.id))
+      .where(eq(schema.solicitudPersonas.personaId, id))
+      .orderBy(desc(schema.solicitudes.updatedAt))
+      .all();
+
     // Estado de habilitación de ingreso (para la ficha unificada: consultar + registrar).
     const vig = getVigencia(id);
     const local = vig.autorizacion
@@ -107,6 +124,7 @@ export async function personasRoutes(app: FastifyInstance) {
       persona: { ...persona, cuilFormat: persona.cuil ? formatCuil(persona.cuil) : '—' },
       docStatus,
       analisis,
+      solicitudes,
       autorizaciones,
       ingresos,
       vigencia: vig.estado,

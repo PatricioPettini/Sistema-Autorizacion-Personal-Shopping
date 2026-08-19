@@ -233,6 +233,7 @@ export async function solicitudesRoutes(app: FastifyInstance) {
       if (created) audit({ userId: req.user!.id, accion: 'PERSONA_CREADA', entidad: 'persona', entidadId: persona.id, ip: req.ip });
     }
     recomputeSolicitudEstado(sol.id);
+    asignarNroOrden(sol.id); // número desde el alta (igual que las que entran por email)
     audit({ userId: req.user!.id, accion: 'SOLICITUD_CREADA_MANUAL', entidad: 'solicitud', entidadId: sol.id, detalle: { personas: personas.length, categoria: data.categoria, localId: local.id, localCreado }, ip: req.ip });
     return { solicitudId: sol.id, personas: personas.length, local: { id: local.id, nombre: local.nombre, creado: localCreado } };
   });

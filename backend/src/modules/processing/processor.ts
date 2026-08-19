@@ -11,7 +11,7 @@ import { findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../pers
 import { getPlaceholderLocalId } from '../../db/migrate.js';
 import { parsePersonasSpreadsheet } from '../../lib/xlsx.js';
 import { findOrCreateLocal } from '../locales/service.js';
-import { recomputeSolicitudEstado } from '../solicitudes/service.js';
+import { recomputeSolicitudEstado, asignarNroOrden } from '../solicitudes/service.js';
 
 interface FileItem {
   filename: string;
@@ -190,6 +190,9 @@ export async function processEmail(emailId: number): Promise<void> {
     }
 
     recomputeSolicitudEstado(sol.id);
+    // El número de orden se asigna al entrar el mail (identifica la solicitud desde el minuto cero).
+    // Es idempotente y compartido por todo el grupo del email.
+    asignarNroOrden(sol.id);
     // Siempre PROCESSED: si el local no se identificó, la solicitud queda "(Sin asignar)"
     // y el admin la reasigna desde Solicitudes (ya no existe la bandeja de Revisión manual).
     setEmailEstado(emailId, 'PROCESSED', avisoPersonas);

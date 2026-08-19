@@ -17,8 +17,10 @@ export default function PersonaDetalle() {
   const [edit, setEdit] = useState({ nombre: '', apellido: '', cuil: '', categoria: '', empresa: '' });
 
   if (!data) return <Spinner />; // solo en la carga inicial; en recargas mantenemos el contenido
-  const { persona, docStatus, analisis, autorizaciones, ingresos, vigencia, autorizacionVigente, localVigente, ingresoAbierto } = data;
+  const { persona, docStatus, analisis, solicitudes = [], autorizaciones, ingresos, vigencia, autorizacionVigente, localVigente, ingresoAbierto } = data;
   const autorizado = vigencia === 'AUTORIZADO';
+  // Solicitudes todavía abiertas (no cerradas/rechazadas) donde se autoriza a esta persona.
+  const solicitudesAbiertas = (solicitudes as any[]).filter((s) => !['RECHAZADA', 'REEMPLAZADA'].includes(s.estadoPersona));
 
   const registrarIngreso = async () => {
     if (!autorizacionVigente?.localId) return;
@@ -85,7 +87,25 @@ export default function PersonaDetalle() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card">
             <div className="card-head">Documentación</div>
-            <div className="card-body"><DocList docStatus={docStatus} personaId={persona.id} onChanged={reload} /></div>
+            <div className="card-body">
+              {isAdmin && (
+                <div className="alert info" style={{ marginBottom: 12 }}>
+                  Acá aprobás o rechazás la documentación (vale para <strong>todas</strong> las solicitudes de esta persona).
+                  La <strong>autorización de ingreso</strong> y la <strong>fecha de vigencia</strong> se cargan en la solicitud, porque son por local.
+                  {docStatus.todosVerificados && <div style={{ marginTop: 6 }}>✅ Documentación completa: entrá a la solicitud y cargá la <strong>“Vigencia hasta”</strong> para autorizarla.</div>}
+                  {solicitudesAbiertas.length > 0 && (
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {solicitudesAbiertas.map((s: any) => (
+                        <button key={s.solicitudId} className="btn ghost sm" onClick={() => nav(`/solicitudes/${s.solicitudId}`)}>
+                          Ir a la solicitud{s.nroOrden ? ` ${s.nroOrden}` : ''} · {s.local}{s.fechaVencimiento ? '' : ' (sin vigencia)'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <DocList docStatus={docStatus} personaId={persona.id} onChanged={reload} />
+            </div>
           </div>
 
           <div className="card">
