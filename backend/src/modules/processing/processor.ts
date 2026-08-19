@@ -12,15 +12,24 @@ import { getPlaceholderLocalId } from '../../db/migrate.js';
 import { parsePersonasSpreadsheet } from '../../lib/xlsx.js';
 import { findOrCreateLocal } from '../locales/service.js';
 import { recomputeSolicitudEstado, asignarNroOrden } from '../solicitudes/service.js';
+import { sendMail } from '../email/mailer.js';
+
+/** Extrae la dirección de un "Nombre <addr@dom>" o devuelve el texto si ya es una dirección. */
+function extraerEmail(remitente: string | null | undefined): string {
+  if (!remitente) return '';
+  const m = remitente.match(/<([^>]+)>/);
+  return (m ? m[1] : remitente).trim();
+}
 
 interface FileItem {
   filename: string;
   buffer: Buffer;
 }
 
-// Máximo de personas que se procesan automáticamente desde una planilla. Por encima de esto
-// el email se manda a revisión manual (protección: evita que una planilla enorme cuelgue el sistema).
-const MAX_PERSONAS_PLANILLA = 300;
+// Máximo de personas por solicitud que se procesan automáticamente. Por encima de esto no se
+// crea la solicitud: se avisa al remitente y queda en respaldo. Es un límite operativo (alguien
+// tiene que revisar la documentación de cada persona a mano) además de protección del sistema.
+const MAX_PERSONAS_PLANILLA = 40;
 
 function setEmailEstado(emailId: number, estado: string, error?: string | null) {
   db.update(schema.emailMessages).set({ estado, error: error ?? null, updatedAt: nowIso() }).where(eq(schema.emailMessages.id, emailId)).run();
@@ -99,7 +108,7 @@ function esExcel(filename: string, contentType?: string): boolean {
  *  - Se crea UNA solicitud (un local) con VARIAS personas.
  * La documentación se revisa manualmente desde el email embebido en la solicitud.
  */
-export async function processEmail(emailId: number): Promise<void> {
+export async function processEmail(emailId: number, opts: { force?: boolean } = {}): Promise<void> {
   const email = db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, emailId)).get();
   if (!email) return;
   if (email.estado === 'PROCESSED') return;
@@ -111,6 +120,32 @@ export async function processEmail(emailId: number): Promise<void> {
       return;
     }
     const parsed = await simpleParser(fs.readFileSync(email.rawStoredPath));
+
+    // ¿Es una RESPUESTA o continuación de un correo anterior? (In-Reply-To / References
+    // apuntan a un Message-ID que ya conocemos: un correo recibido o uno que nosotros
+    // enviamos, ej. el aviso de "documentación observada"). En ese caso NO se reprocesa
+    // automáticamente —evita duplicar solicitudes— y se manda a respaldo para revisar a mano.
+    const refs = new Set<string>();
+    if (!opts.force && parsed.inReplyTo) parsed.inReplyTo.split(/\s+/).forEach((r) => r && refs.add(r.trim()));
+    const rawRefs = opts.force ? null : parsed.references;
+    if (rawRefs) (Array.isArray(rawRefs) ? rawRefs : [rawRefs]).forEach((r) => r && refs.add(String(r).trim()));
+    for (const r of refs) {
+      if (r === email.messageId) continue;
+      const recibido = db.select({ id: schema.emailMessages.id, solId: schema.emailMessages.replySolicitudId }).from(schema.emailMessages).where(eq(schema.emailMessages.messageId, r)).get();
+      const enviado = db.select({ id: schema.sentEmails.id, solId: schema.sentEmails.solicitudId }).from(schema.sentEmails).where(eq(schema.sentEmails.messageId, r)).get();
+      if (recibido || enviado) {
+        // Solicitud original a la que pertenece esta respuesta (para cargar ahí la doc corregida).
+        const solId = enviado?.solId ?? recibido?.solId ?? null;
+        const sol = solId ? db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, solId)).get() : null;
+        const ref = sol?.nroOrden ? `la solicitud ${sol.nroOrden}` : 'la solicitud original';
+        const motivo = enviado
+          ? `Es una respuesta a un aviso que envió el sistema (posible documentación corregida). Revisala a mano y cargá los documentos en ${ref}.`
+          : 'Es una respuesta/continuación de un correo anterior (posible reenvío o corrección). Revisala a mano.';
+        db.update(schema.emailMessages).set({ estado: 'NEEDS_REVIEW', error: motivo, replySolicitudId: solId, updatedAt: nowIso() }).where(eq(schema.emailMessages.id, emailId)).run();
+        audit({ accion: 'EMAIL_A_RESPALDO', entidad: 'email', entidadId: emailId, detalle: { motivo: 'reprocesamiento', esRespuestaASistema: !!enviado, solicitudId: solId } });
+        return;
+      }
+    }
 
     // Aplanar adjuntos (expandir ZIPs) para poder ubicar el Excel.
     const items: FileItem[] = [];
@@ -135,13 +170,22 @@ export async function processEmail(emailId: number): Promise<void> {
     const excel = items.find((it) => esExcel(it.filename));
     const filas = excel ? parsePersonasSpreadsheet(excel.filename, excel.buffer) : [];
 
-    // PROTECCIÓN anti-sobrecarga: una planilla con demasiadas personas (ej. 3300) crea miles
-    // de registros y hace que el detalle se cuelgue. No se procesa automáticamente: el email
-    // queda para revisión manual (respaldo) sin crear la solicitud ni las personas.
+    // Límite operativo/anti-sobrecarga: una planilla con demasiadas personas no se puede revisar
+    // a mano (y una enorme, ej. 3300, cuelga el sistema). No se crea la solicitud: se avisa al
+    // remitente por email y el correo queda en respaldo con una notificación en el sistema.
     if (filas.length > MAX_PERSONAS_PLANILLA) {
-      const motivo = `La planilla tiene ${filas.length} personas (máximo permitido: ${MAX_PERSONAS_PLANILLA}). No se procesó automáticamente para no sobrecargar el sistema; revisala a mano.`;
-      setEmailEstado(emailId, 'ERROR', motivo);
-      audit({ accion: 'EMAIL_PLANILLA_EXCESIVA', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, max: MAX_PERSONAS_PLANILLA } });
+      const motivo = `La planilla tiene ${filas.length} personas (máximo permitido: ${MAX_PERSONAS_PLANILLA}). No se procesó automáticamente: se avisó al remitente para que la divida.`;
+      const to = extraerEmail(email.remitente);
+      const asunto = `No procesada — supera el máximo de ${MAX_PERSONAS_PLANILLA} personas`;
+      const texto = `Recibimos su solicitud${email.asunto ? ` ("${email.asunto}")` : ''}, pero incluye ${filas.length} personas y el máximo por solicitud es ${MAX_PERSONAS_PLANILLA}.
+
+Por favor divida el pedido en solicitudes de hasta ${MAX_PERSONAS_PLANILLA} personas y reenvíelas. Cada envío se procesa por separado.`;
+      let avisoEnviado = false;
+      if (to) { avisoEnviado = (await sendMail({ to, subject: asunto, text: texto, inReplyTo: email.messageId, meta: { tipo: 'PLANILLA_EXCESIVA', emailMessageId: emailId } })).enviado; }
+      setEmailEstado(emailId, 'NEEDS_REVIEW', avisoEnviado
+        ? `${motivo}`
+        : `La planilla tiene ${filas.length} personas (máximo ${MAX_PERSONAS_PLANILLA}). No se pudo avisar al remitente automáticamente${to ? '' : ' (el correo no tiene remitente)'}; avisale a mano.`);
+      audit({ accion: 'EMAIL_PLANILLA_EXCESIVA', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, max: MAX_PERSONAS_PLANILLA, avisoEnviado, to } });
       return;
     }
 
@@ -156,7 +200,9 @@ export async function processEmail(emailId: number): Promise<void> {
     let sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.emailMessageId, emailId)).get();
     if (!sol) {
       // personaId (contacto principal) es legacy y opcional: las personas reales van en solicitud_personas.
-      sol = db.insert(schema.solicitudes).values({ localId: localFinal, emailMessageId: emailId, estado: 'PENDIENTE' }).returning().get();
+      const nueva = db.insert(schema.solicitudes).values({ localId: localFinal, emailMessageId: emailId, estado: 'PENDIENTE' }).returning().get();
+      if (!nueva) throw new Error('No se pudo crear la solicitud del email.');
+      sol = nueva;
       audit({ accion: 'SOLICITUD_CREADA', entidad: 'solicitud', entidadId: sol.id, detalle: { origen: 'email', personas: filas.length } });
     } else if (detectedLocalId && sol.localId !== localFinal) {
       db.update(schema.solicitudes).set({ localId: localFinal, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, sol.id)).run();

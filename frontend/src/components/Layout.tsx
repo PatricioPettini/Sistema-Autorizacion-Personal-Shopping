@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth';
+import { api } from '../api';
 
 function Item({ to, ico, label, pill }: { to: string; ico: string; label: string; pill?: number }) {
   return (
@@ -17,6 +18,17 @@ export default function Layout({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const [q, setQ] = useState('');
   const isAdmin = user?.rol === 'ADMIN';
+  const [respaldo, setRespaldo] = useState(0);
+
+  // Contador de correos en respaldo (para la campanita). Se refresca cada 60s.
+  useEffect(() => {
+    if (!isAdmin) return;
+    let vivo = true;
+    const cargar = () => api.get<{ count: number }>('/emails/respaldo/count').then((r) => { if (vivo) setRespaldo(r.count); }).catch(() => {});
+    cargar();
+    const t = setInterval(cargar, 60000);
+    return () => { vivo = false; clearInterval(t); };
+  }, [isAdmin]);
 
   const onSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,6 +51,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           {isAdmin && (
             <>
               <div className="nav-group">Administración</div>
+              <Item to="/respaldo" ico="🛟" label="Respaldo" pill={respaldo || undefined} />
               <Item to="/locales" ico="🏬" label="Locales" />
               <Item to="/usuarios" ico="👥" label="Usuarios" />
               <Item to="/tipos-documento" ico="🗂️" label="Tipos de documento" />
@@ -62,6 +75,21 @@ export default function Layout({ children }: { children: ReactNode }) {
             <span className="ico">🔎</span>
             <input placeholder="Buscar por CUIL o nombre…" value={q} onChange={(e) => setQ(e.target.value)} />
           </form>
+          {isAdmin && (
+            <button
+              className="bell"
+              onClick={() => nav('/respaldo')}
+              title={respaldo ? `${respaldo} correo(s) en respaldo para revisar` : 'Respaldo: sin pendientes'}
+              style={{ position: 'relative', marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}
+            >
+              🔔
+              {respaldo > 0 && (
+                <span style={{ position: 'absolute', top: -6, right: -6, background: 'var(--red, #dc2626)', color: '#fff', borderRadius: 999, fontSize: 11, fontWeight: 700, minWidth: 18, height: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
+                  {respaldo > 99 ? '99+' : respaldo}
+                </span>
+              )}
+            </button>
+          )}
         </div>
         <div className="content">{children}</div>
       </div>

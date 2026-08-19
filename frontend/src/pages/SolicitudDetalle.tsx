@@ -5,6 +5,7 @@ import { api, fmtFecha, fmtSoloFecha, tipoLabel } from '../api';
 import { Badge, Spinner, Modal, useToast } from '../ui';
 import { DocList } from '../components/DocList';
 import { EmailInline } from '../components/EmailInline';
+import { SentEmails } from '../components/SentEmails';
 import { useAuth } from '../auth';
 
 type AccionModal = { tipo: 'observar' | 'rechazar'; personaId: number; solicitudId: number; nombre: string };
@@ -275,6 +276,12 @@ export default function SolicitudDetalle() {
           {isAdmin && <> <button className="btn sm primary" style={{ marginLeft: 8 }} onClick={() => setAgregar(true)}>+ Agregar persona</button></>}
         </div></div>
       )}
+
+      {/* Correos enviados al remitente desde el sistema */}
+      <div className="card">
+        <div className="card-head">📤 Correos enviados</div>
+        <div className="card-body"><SentEmails solicitudId={solicitud.id} /></div>
+      </div>
 
       {/* Comentarios */}
       <div className="card">

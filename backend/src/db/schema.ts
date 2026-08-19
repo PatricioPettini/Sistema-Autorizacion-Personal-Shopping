@@ -103,6 +103,10 @@ export const emailMessages = sqliteTable(
     rawStoredPath: text('raw_stored_path'),
     attachmentsCount: integer('attachments_count').notNull().default(0),
     error: text('error'),
+    // Si es una respuesta a un aviso del sistema: la solicitud original a la que pertenece
+    // (para cargar la documentación corregida ahí desde el respaldo). FK a nivel SQL (schema.sql);
+    // sin .references() acá para no crear un ciclo de tipos con `solicitudes`.
+    replySolicitudId: integer('reply_solicitud_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -347,3 +351,25 @@ export const settings = sqliteTable('settings', {
   value: text('value'),
   updatedAt: updatedAt(),
 });
+
+// ---------------------------------------------------------------------------
+// Correos que ENVÍA el sistema (registro de enviados)
+// ---------------------------------------------------------------------------
+export const sentEmails = sqliteTable(
+  'sent_emails',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    messageId: text('message_id'),
+    inReplyTo: text('in_reply_to'),
+    destinatario: text('destinatario'),
+    asunto: text('asunto'),
+    cuerpo: text('cuerpo'),
+    tipo: text('tipo'), // RESULTADO_REVISION | OBSERVACION | RECHAZO | AUTORIZACION
+    solicitudId: integer('solicitud_id').references(() => solicitudes.id),
+    emailMessageId: integer('email_message_id').references(() => emailMessages.id),
+    ok: integer('ok', { mode: 'boolean' }).notNull().default(true),
+    error: text('error'),
+    createdAt: createdAt(),
+  },
+  (t) => ({ messageIdIdx: index('sent_message_id_idx').on(t.messageId), solicitudIdx: index('sent_solicitud_idx').on(t.solicitudId) }),
+);

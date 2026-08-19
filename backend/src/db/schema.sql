@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS email_messages (
   raw_stored_path TEXT,
   attachments_count INTEGER NOT NULL DEFAULT 0,
   error TEXT,
+  reply_solicitud_id INTEGER REFERENCES solicitudes(id),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -261,3 +262,22 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT,
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Registro de correos que ENVÍA el sistema (avisos al remitente). Sirve para
+-- verlos dentro del sistema y para detectar respuestas a nuestros avisos.
+CREATE TABLE IF NOT EXISTS sent_emails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id TEXT,
+  in_reply_to TEXT,
+  destinatario TEXT,
+  asunto TEXT,
+  cuerpo TEXT,
+  tipo TEXT,
+  solicitud_id INTEGER REFERENCES solicitudes(id),
+  email_message_id INTEGER REFERENCES email_messages(id),
+  ok INTEGER NOT NULL DEFAULT 1,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS sent_message_id_idx ON sent_emails(message_id);
+CREATE INDEX IF NOT EXISTS sent_solicitud_idx ON sent_emails(solicitud_id);

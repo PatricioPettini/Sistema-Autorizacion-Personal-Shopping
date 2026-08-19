@@ -20,12 +20,13 @@ function fmtFechaCorta(f: string | null | undefined): string {
 }
 
 /** Destinatario de una solicitud/persona: el email del local (si existe). */
-function destinatario(solicitudId: number, personaId: number): { to: string; persona: any; local: any } | null {
+function destinatario(solicitudId: number, personaId: number): { to: string; persona: any; local: any; sol: any; inReplyTo: string | null } | null {
   const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, solicitudId)).get();
   if (!sol) return null;
   const persona = db.select().from(schema.personas).where(eq(schema.personas.id, personaId)).get();
   const local = db.select().from(schema.locales).where(eq(schema.locales.id, sol.localId)).get();
-  return { to: local?.email ?? '', persona, local };
+  const origen = sol.emailMessageId ? db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, sol.emailMessageId)).get() : null;
+  return { to: local?.email ?? '', persona, local, sol, inReplyTo: origen?.messageId ?? null };
 }
 
 export async function notifyObservacion(solicitudId: number, personaId: number, comentario: string): Promise<void> {
@@ -41,7 +42,7 @@ Observación:
 ${comentario || '(sin detalle)'}
 
 Por favor revisar y reenviar la documentación corregida.`;
-  const enviado = await sendMail({ to: d.to, subject: `Documentación observada — ${d.persona.nombre} ${d.persona.apellido}`, text: texto });
+  const { enviado } = await sendMail({ to: d.to, subject: `Documentación observada — ${d.persona.nombre} ${d.persona.apellido}`, text: texto, inReplyTo: d.inReplyTo, meta: { tipo: 'OBSERVACION', solicitudId, emailMessageId: d.sol.emailMessageId } });
   if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'solicitud', entidadId: solicitudId, detalle: { tipo: 'OBSERVACION', personaId } });
 }
 
@@ -56,7 +57,7 @@ Local: ${d.local?.nombre ?? '-'}
 
 Motivo del rechazo:
 ${motivo}`;
-  const enviado = await sendMail({ to: d.to, subject: `Ingreso rechazado — ${d.persona.nombre} ${d.persona.apellido}`, text: texto });
+  const { enviado } = await sendMail({ to: d.to, subject: `Ingreso rechazado — ${d.persona.nombre} ${d.persona.apellido}`, text: texto, inReplyTo: d.inReplyTo, meta: { tipo: 'RECHAZO', solicitudId, emailMessageId: d.sol.emailMessageId } });
   if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'solicitud', entidadId: solicitudId, detalle: { tipo: 'RECHAZO', personaId } });
 }
 
@@ -76,7 +77,7 @@ Fecha: ${rango}
 Horario: ${aut.horaDesde} a ${aut.horaHasta}
 Estado: AUTORIZADO
 ${aut.comentario ? `\nComentario: ${aut.comentario}` : ''}`;
-  const enviado = await sendMail({ to: local?.email ?? '', subject: `Ingreso autorizado — ${persona.nombre} ${persona.apellido}`, text: texto });
+  const { enviado } = await sendMail({ to: local?.email ?? '', subject: `Ingreso autorizado — ${persona.nombre} ${persona.apellido}`, text: texto, meta: { tipo: 'AUTORIZACION', solicitudId: aut.solicitudId } });
   if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'autorizacion', entidadId: autorizacionId, detalle: { tipo: 'AUTORIZACION' } });
 }
 
@@ -136,7 +137,7 @@ Por las personas que figuran como PENDIENTE, enviar la documentación faltante p
 
   const asuntoLocal = local?.nombre ?? 'Ingreso de personal';
   const subject = nroOrden ? `Orden ${nroOrden} — Resultado de la revisión — ${asuntoLocal}` : `Resultado de la revisión — ${asuntoLocal}`;
-  const enviado = await sendMail({ to, subject, text: texto });
+  const { enviado } = await sendMail({ to, subject, text: texto, inReplyTo: email?.messageId ?? null, meta: { tipo: 'RESULTADO_REVISION', solicitudId, emailMessageId: sol.emailMessageId } });
   if (enviado) audit({ accion: 'EMAIL_ENVIADO', entidad: 'solicitud', entidadId: solicitudId, detalle: { tipo: 'RESULTADO_REVISION', to, nroOrden } });
   return { enviado, to, nroOrden };
 }

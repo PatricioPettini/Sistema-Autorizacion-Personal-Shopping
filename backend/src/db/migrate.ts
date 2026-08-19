@@ -54,6 +54,7 @@ function migrateColumns(): void {
   ensureColumn('solicitudes', 'fecha_vencimiento', 'TEXT'); // vencimiento único de la solicitud
   ensureColumn('solicitudes', 'nro_orden', 'TEXT'); // número de orden de la revisión
   ensureIndex('CREATE INDEX IF NOT EXISTS sol_nro_orden_idx ON solicitudes(nro_orden)');
+  ensureColumn('email_messages', 'reply_solicitud_id', 'INTEGER'); // respuesta -> solicitud original (respaldo)
 }
 
 /**

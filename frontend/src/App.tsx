@@ -18,6 +18,7 @@ import TiposDocumento from './pages/TiposDocumento';
 import ConfigEmail from './pages/ConfigEmail';
 import Monitor from './pages/Monitor';
 import Auditoria from './pages/Auditoria';
+import Respaldo from './pages/Respaldo';
 
 function AdminRoute({ children }: { children: ReactElement }) {
   const { user } = useAuth();
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/locales" element={<AdminRoute><Locales /></AdminRoute>} />
         <Route path="/usuarios" element={<AdminRoute><Usuarios /></AdminRoute>} />
         <Route path="/tipos-documento" element={<AdminRoute><TiposDocumento /></AdminRoute>} />
+        <Route path="/respaldo" element={<AdminRoute><Respaldo /></AdminRoute>} />
         <Route path="/config/email" element={<AdminRoute><ConfigEmail /></AdminRoute>} />
         <Route path="/monitor" element={<AdminRoute><Monitor /></AdminRoute>} />
         <Route path="/auditoria" element={<AdminRoute><Auditoria /></AdminRoute>} />

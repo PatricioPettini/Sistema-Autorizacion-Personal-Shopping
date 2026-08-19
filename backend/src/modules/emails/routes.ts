@@ -1,10 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs';
-import { eq } from 'drizzle-orm';
+import { eq, desc, inArray } from 'drizzle-orm';
 import { simpleParser } from 'mailparser';
 import { db, schema } from '../../db/client.js';
 import { notFound } from '../../lib/errors.js';
 import { contentDisposition } from '../../lib/files.js';
+import { audit } from '../../lib/audit.js';
+import { nowIso } from '../../lib/datetime.js';
+import { processEmail } from '../processing/processor.js';
+
+// Estados de email que quedan en el "respaldo" (no terminaron en una solicitud automática).
+const ESTADOS_RESPALDO = ['NEEDS_REVIEW', 'ERROR'];
 
 const MIME: Record<string, string> = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' };
 
@@ -73,5 +79,85 @@ export async function emailsRoutes(app: FastifyInstance) {
     reply.header('Content-Type', att.contentType || MIME[ext] || 'application/octet-stream');
     reply.header('Content-Disposition', contentDisposition('inline', att.filename ?? 'adjunto'));
     return reply.send(att.content as Buffer);
+  });
+
+  const soloAdmin = { onRequest: app.requireAdmin };
+
+  // Cantidad de correos en respaldo (para la campanita del encabezado).
+  app.get('/respaldo/count', async () => {
+    const rows = db.select({ id: schema.emailMessages.id }).from(schema.emailMessages)
+      .where(inArray(schema.emailMessages.estado, ESTADOS_RESPALDO)).all();
+    return { count: rows.length };
+  });
+
+  // Respaldo: correos que no terminaron en una solicitud automática (errores, sin planilla
+  // legible, planillas excesivas, respuestas/reenvíos). Se revisan a mano.
+  app.get('/respaldo', async () => {
+    const rows = db.select({
+      id: schema.emailMessages.id,
+      remitente: schema.emailMessages.remitente,
+      asunto: schema.emailMessages.asunto,
+      fecha: schema.emailMessages.fechaEmail,
+      fechaRecibido: schema.emailMessages.fechaRecibido,
+      estado: schema.emailMessages.estado,
+      motivo: schema.emailMessages.error,
+      attachmentsCount: schema.emailMessages.attachmentsCount,
+      replySolicitudId: schema.emailMessages.replySolicitudId,
+    }).from(schema.emailMessages)
+      .where(inArray(schema.emailMessages.estado, ESTADOS_RESPALDO))
+      .orderBy(desc(schema.emailMessages.fechaRecibido)).all();
+
+    // Enriquecer con la solicitud original vinculada (si la respuesta apunta a una).
+    const solIds = [...new Set(rows.map((r) => r.replySolicitudId).filter((x): x is number => !!x))];
+    const sols = solIds.length
+      ? db.select({ id: schema.solicitudes.id, nroOrden: schema.solicitudes.nroOrden, local: schema.locales.nombre })
+          .from(schema.solicitudes).innerJoin(schema.locales, eq(schema.solicitudes.localId, schema.locales.id))
+          .where(inArray(schema.solicitudes.id, solIds)).all()
+      : [];
+    const solMap = new Map(sols.map((s) => [s.id, s]));
+    return rows.map((r) => ({ ...r, solicitud: r.replySolicitudId ? solMap.get(r.replySolicitudId) ?? null : null }));
+  });
+
+  // Reprocesar un correo del respaldo forzando el alta de solicitud (ignora la detección de respuesta).
+  app.post('/:id/procesar', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const email = db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, id)).get();
+    if (!email) throw notFound('Email no encontrado.');
+    // Volver a un estado no-terminal para que processEmail lo tome.
+    db.update(schema.emailMessages).set({ estado: 'RECEIVED', error: null, updatedAt: nowIso() }).where(eq(schema.emailMessages.id, id)).run();
+    await processEmail(id, { force: true });
+    audit({ userId: req.user!.id, accion: 'EMAIL_REPROCESADO', entidad: 'email', entidadId: id, ip: req.ip });
+    const after = db.select({ estado: schema.emailMessages.estado, error: schema.emailMessages.error }).from(schema.emailMessages).where(eq(schema.emailMessages.id, id)).get();
+    return { ok: true, estado: after?.estado, motivo: after?.error };
+  });
+
+  // Descartar un correo del respaldo (ya resuelto a mano). Sale de la bandeja.
+  app.post('/:id/descartar', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const email = db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, id)).get();
+    if (!email) throw notFound('Email no encontrado.');
+    db.update(schema.emailMessages).set({ estado: 'REVISADO', updatedAt: nowIso() }).where(eq(schema.emailMessages.id, id)).run();
+    audit({ userId: req.user!.id, accion: 'EMAIL_RESPALDO_DESCARTADO', entidad: 'email', entidadId: id, ip: req.ip });
+    return { ok: true };
+  });
+
+  // Registro de correos ENVIADOS por el sistema (opcionalmente filtrado por solicitud).
+  app.get('/enviados', async (req) => {
+    const solicitudId = Number((req.query as any)?.solicitudId) || null;
+    const base = db.select({
+      id: schema.sentEmails.id,
+      fecha: schema.sentEmails.createdAt,
+      destinatario: schema.sentEmails.destinatario,
+      asunto: schema.sentEmails.asunto,
+      cuerpo: schema.sentEmails.cuerpo,
+      tipo: schema.sentEmails.tipo,
+      ok: schema.sentEmails.ok,
+      error: schema.sentEmails.error,
+      solicitudId: schema.sentEmails.solicitudId,
+    }).from(schema.sentEmails);
+    const rows = solicitudId
+      ? base.where(eq(schema.sentEmails.solicitudId, solicitudId)).orderBy(desc(schema.sentEmails.createdAt)).all()
+      : base.orderBy(desc(schema.sentEmails.createdAt)).limit(200).all();
+    return rows;
   });
 }
