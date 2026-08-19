@@ -7,7 +7,7 @@ import { badRequest, notFound } from '../../lib/errors.js';
 import { nowIso } from '../../lib/datetime.js';
 import { formatCuil, findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
 import { getPersonaDocStatus } from '../documentos/service.js';
-import { getVigencia, recomputeAutorizacionPersona } from '../autorizaciones/service.js';
+import { getVigencia, recomputeAutorizacionPersona, recomputeAutorizacionesDePersona } from '../autorizaciones/service.js';
 import { recomputeSolicitudEstado, aggEstado, agruparPorEmail, asignarNroOrden } from './service.js';
 import { findOrCreateLocal } from '../locales/service.js';
 import { notifyObservacion, notifyRechazo, notifyResultadoRevision } from '../notifications/service.js';
@@ -293,6 +293,28 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     db.update(schema.solicitudes).set({ localId, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, id)).run();
     audit({ userId: req.user!.id, accion: 'SOLICITUD_LOCAL_ASIGNADO', entidad: 'solicitud', entidadId: id, detalle: { localId }, ip: req.ip });
     return { ok: true };
+  });
+
+  // Fijar el tipo de contratista (EMPRESA | MONOTRIBUTISTA) de toda la solicitud.
+  // Útil cuando el asunto/cuerpo no lo declaró. Define qué documentación se exige.
+  // Se aplica a todas las personas del grupo del email.
+  app.post('/:id/tipo', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const categoria = String((req.body as any)?.categoria ?? '').toUpperCase();
+    if (!TIPOS.includes(categoria as any)) throw badRequest('Tipo inválido (EMPRESA o MONOTRIBUTISTA).');
+    const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
+    if (!sol) throw notFound('Solicitud no encontrada.');
+    const hermanas = sol.emailMessageId != null
+      ? db.select().from(schema.solicitudes).where(eq(schema.solicitudes.emailMessageId, sol.emailMessageId)).all()
+      : [sol];
+    const solIds = hermanas.map((s) => s.id);
+    const sps = db.select({ personaId: schema.solicitudPersonas.personaId }).from(schema.solicitudPersonas).where(inArray(schema.solicitudPersonas.solicitudId, solIds)).all();
+    for (const sp of sps) {
+      db.update(schema.personas).set({ categoria, updatedAt: nowIso() }).where(eq(schema.personas.id, sp.personaId)).run();
+      recomputeAutorizacionesDePersona(sp.personaId, req.user!.id);
+    }
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_TIPO_ASIGNADO', entidad: 'solicitud', entidadId: id, detalle: { categoria, personas: sps.length }, ip: req.ip });
+    return { ok: true, categoria, personas: sps.length };
   });
 
   // Fijar la fecha de vencimiento ÚNICA de la solicitud (se aplica a todo el grupo del email).

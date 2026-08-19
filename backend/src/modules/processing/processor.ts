@@ -9,7 +9,7 @@ import { isZip } from '../../lib/files.js';
 import { extractZip } from './zip.js';
 import { findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
 import { getPlaceholderLocalId } from '../../db/migrate.js';
-import { parsePersonasExcel } from '../../lib/xlsx.js';
+import { parsePersonasSpreadsheet } from '../../lib/xlsx.js';
 import { findOrCreateLocal } from '../locales/service.js';
 import { recomputeSolicitudEstado } from '../solicitudes/service.js';
 
@@ -23,29 +23,53 @@ function setEmailEstado(emailId: number, estado: string, error?: string | null) 
 }
 
 /**
- * Extrae el nombre del local del asunto con el estándar:
- *   "Solicitud FAO (Local) texto extra"
- * Acepta el nombre entre paréntesis, entre guiones, o como tercera palabra.
+ * Extrae el nombre del local a partir del asunto. Es tolerante a los formatos que
+ * mandan los encargados, no solo el estándar. Ejemplos que resuelve:
+ *   "Solicitud FAO (Local) empresa"        -> "Local"
+ *   "SOLICITUD DE FAO (CHEEKY)-EMPRESA"     -> "CHEEKY"
+ *   "Solicitud de FAO Bensimon"             -> "Bensimon"
+ *   "Solicitud de FAO Bensimon para ingreso y egreso de mercaderia" -> "Bensimon"
+ * Acepta el "de" opcional, mayúsculas/minúsculas, nombre entre paréntesis o suelto,
+ * y descarta el tipo (empresa/monotributista) y frases de relleno del asunto.
  */
 export function parseLocalFromSubject(asunto: string | null): string | null {
   if (!asunto) return null;
   const s = asunto.trim();
-  const esTipo = (w: string) => /^(empresas?|monotributistas?)$/i.test(w);
-  let m = s.match(/solicitud\s+fao\s*\(([^)]+)\)/i);
-  if (m) return m[1].trim().replace(/\s+/g, ' ');
-  m = s.match(/solicitud\s+fao\s*[-–—]\s*([^-–—]+?)\s*(?:[-–—]|$)/i);
-  if (m) return m[1].trim().replace(/\s+/g, ' ');
-  m = s.match(/solicitud\s+fao\s+(\S+)/i);
-  if (m && !esTipo(m[1])) return m[1].trim(); // no confundir el tipo con el nombre del local
+  // Saca tokens de tipo y separadores/paréntesis; colapsa espacios.
+  const limpiar = (x: string) =>
+    x.replace(/\b(empresas?|monotributistas?|mono)\b/gi, '')
+      .replace(/[()\-–—:]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  // 1) Nombre entre paréntesis en un asunto de FAO: "... FAO (CHEEKY) ...".
+  if (/\bfao\b/i.test(s)) {
+    const par = s.match(/\(([^)]+)\)/);
+    if (par) { const n = limpiar(par[1]); if (n) return n; }
+  }
+  // 2) Lo que viene después de "FAO" (con "de" opcional ya incluido en el resto).
+  const m = s.match(/\bfao\b\s*(.+)$/i);
+  if (m) {
+    // Cortar en frases típicas de asunto ("para...", "ingreso...") y en separadores.
+    let rest = m[1].replace(/^[\s\-–—:]+/, '');
+    rest = rest.split(/\b(?:para|de\s+ingreso|ingreso|egreso)\b|[-–—:|]/i)[0];
+    const n = limpiar(rest);
+    if (n) return n;
+  }
   return null;
 }
 
-/** Detecta el tipo de contratista declarado en el asunto: EMPRESA | MONOTRIBUTISTA | null. */
-export function parseTipoFromSubject(asunto: string | null): 'EMPRESA' | 'MONOTRIBUTISTA' | null {
-  if (!asunto) return null;
-  if (/monotrib/i.test(asunto)) return 'MONOTRIBUTISTA';
-  if (/empresa/i.test(asunto)) return 'EMPRESA';
+/** Detecta el tipo de contratista declarado en un texto (asunto o cuerpo): EMPRESA | MONOTRIBUTISTA | null. */
+export function parseTipo(texto: string | null | undefined): 'EMPRESA' | 'MONOTRIBUTISTA' | null {
+  if (!texto) return null;
+  if (/monotrib/i.test(texto)) return 'MONOTRIBUTISTA';
+  if (/empresa/i.test(texto)) return 'EMPRESA';
   return null;
+}
+
+/** Compatibilidad: tipo declarado en el asunto. */
+export function parseTipoFromSubject(asunto: string | null): 'EMPRESA' | 'MONOTRIBUTISTA' | null {
+  return parseTipo(asunto);
 }
 
 /**
@@ -60,7 +84,7 @@ function identifyLocal(asunto: string | null): number | null {
 }
 
 function esExcel(filename: string, contentType?: string): boolean {
-  return /\.(xlsx|xlsm|xls)$/i.test(filename) || /spreadsheet|excel/i.test(contentType ?? '');
+  return /\.(xlsx|xlsm|xls|ods|csv|tsv)$/i.test(filename) || /spreadsheet|excel|csv|opendocument\.spreadsheet/i.test(contentType ?? '');
 }
 
 /**
@@ -105,7 +129,7 @@ export async function processEmail(emailId: number): Promise<void> {
     // El Excel de personas es OPCIONAL. Si no viene (o no se puede leer), la solicitud
     // se crea igual y el admin carga las personas a mano desde el detalle.
     const excel = items.find((it) => esExcel(it.filename));
-    const filas = excel ? parsePersonasExcel(excel.buffer) : [];
+    const filas = excel ? parsePersonasSpreadsheet(excel.filename, excel.buffer) : [];
     const avisoPersonas = !excel
       ? 'El email no trae Excel de personas: cargalas a mano en la solicitud.'
       : filas.length === 0
@@ -123,8 +147,9 @@ export async function processEmail(emailId: number): Promise<void> {
       db.update(schema.solicitudes).set({ localId: localFinal, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, sol.id)).run();
     }
 
-    // Tipo de contratista declarado en el asunto (define qué documentación se exige).
-    const tipo = parseTipoFromSubject(email.asunto);
+    // Tipo de contratista declarado en el asunto o, si no está, en el cuerpo del email
+    // (define qué documentación se exige). Si no aparece, el admin lo define a mano.
+    const tipo = parseTipo(email.asunto) ?? parseTipo(parsed.text);
 
     // Alta/asociación de cada persona del Excel.
     const personaIds: number[] = [];

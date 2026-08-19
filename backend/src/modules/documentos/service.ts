@@ -8,6 +8,7 @@ export interface DocTypeStatus {
   obligatorio: boolean;
   categoria: string;
   controlaEmision: boolean;
+  esRequisitoExtra: boolean; // agregado a mano a esta persona (no viene de su categoría)
   presente: boolean;
   tieneArchivo: boolean;
   documentoId: number | null;
@@ -47,8 +48,26 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
     .orderBy(schema.documentTypes.orden)
     .all();
 
-  // Solo aplican los tipos de la categoría de la persona (más los 'AMBOS').
-  const tipos = todos.filter((t) => t.categoria === 'AMBOS' || t.categoria === categoria);
+  // Requisitos EXTRA asignados a mano a esta persona (ej. trabajo en altura).
+  const extraIds = new Set(
+    db
+      .select({ tipoId: schema.requisitosPersona.tipoDocumentoId })
+      .from(schema.requisitosPersona)
+      .where(eq(schema.requisitosPersona.personaId, personaId))
+      .all()
+      .map((r) => r.tipoId),
+  );
+  const aplicaPorCategoria = (t: (typeof todos)[number]) => t.categoria === 'AMBOS' || t.categoria === categoria;
+
+  // Aplican: los de la categoría (más 'AMBOS') y los requisitos extra de esta persona.
+  const tipos = todos.filter((t) => aplicaPorCategoria(t) || extraIds.has(t.id));
+  // Un requisito extra puede referenciar un tipo desactivado o fuera de 'todos': lo traemos.
+  for (const id of extraIds) {
+    if (!tipos.some((t) => t.id === id)) {
+      const t = db.select().from(schema.documentTypes).where(eq(schema.documentTypes.id, id)).get();
+      if (t) tipos.push(t);
+    }
+  }
 
   const items: DocTypeStatus[] = [];
   const faltantes: string[] = [];
@@ -78,15 +97,20 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
     const vigencia: DocTypeStatus['vigencia'] = verificado ? 'VIGENTE' : null;
     const presente = verificado;
 
-    if (tipo.obligatorio && !presente) faltantes.push(tipo.nombre);
+    // Un requisito extra es obligatorio para esta persona aunque el tipo no lo sea por defecto.
+    const esRequisitoExtra = extraIds.has(tipo.id) && !aplicaPorCategoria(tipo);
+    const obligatorio = tipo.obligatorio || esRequisitoExtra;
+
+    if (obligatorio && !presente) faltantes.push(tipo.nombre);
 
     items.push({
       tipoId: tipo.id,
       codigo: tipo.codigo,
       nombre: tipo.nombre,
-      obligatorio: tipo.obligatorio,
+      obligatorio,
       categoria: tipo.categoria,
       controlaEmision: tipo.controlaEmision,
+      esRequisitoExtra,
       presente,
       tieneArchivo,
       documentoId: doc?.id ?? null,
@@ -102,16 +126,17 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
     });
   }
 
-  const obligatorios = tipos.filter((t) => t.obligatorio);
+  // Se cuenta sobre los items (incluye los requisitos extra de esta persona).
+  const totalObligatorios = items.filter((i) => i.obligatorio).length;
   const completos = items.filter((i) => i.obligatorio && i.presente && i.vigencia !== 'VENCIDO').length;
   // Verificados: obligatorios que Seguridad confirmó explícitamente (VERIFICADO) y siguen vigentes.
   const verificadosObligatorios = items.filter(
     (i) => i.obligatorio && i.verificacion === 'VERIFICADO' && i.vigencia !== 'VENCIDO',
   ).length;
   // Solo hace falta definir categoría si existen requisitos específicos por tipo de contratista.
-  const hayCategoriaEspecifica = todos.some((t) => t.obligatorio && t.categoria !== 'AMBOS');
+  const hayCategoriaEspecifica = todos.some((t) => t.obligatorio && t.categoria !== 'AMBOS' && t.categoria !== 'EXTRA');
   const requiereCategoria = !categoria && hayCategoriaEspecifica;
-  const todosVerificados = !requiereCategoria && obligatorios.length > 0 && verificadosObligatorios === obligatorios.length;
+  const todosVerificados = !requiereCategoria && totalObligatorios > 0 && verificadosObligatorios === totalObligatorios;
 
   return {
     categoria,
@@ -122,7 +147,7 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
     porVencer,
     estadoDocumental: !requiereCategoria && faltantes.length === 0 ? 'COMPLETO' : 'INCOMPLETO',
     completos,
-    totalObligatorios: obligatorios.length,
+    totalObligatorios,
     verificadosObligatorios,
     todosVerificados,
   };

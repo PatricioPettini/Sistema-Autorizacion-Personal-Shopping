@@ -9,16 +9,26 @@ import { useAuth } from '../auth';
 
 type AccionModal = { tipo: 'observar' | 'rechazar'; personaId: number; solicitudId: number; nombre: string };
 
-/** Extrae el nombre del local del asunto "Solicitud FAO (Local) Tipo" (igual que el backend). */
+/** Extrae el nombre del local del asunto (mismo criterio flexible que el backend). */
 function localFromAsunto(asunto?: string | null): string | null {
   if (!asunto) return null;
   const s = asunto.trim();
-  let m = s.match(/solicitud\s+fao\s*\(([^)]+)\)/i);
-  if (m) return m[1].trim().replace(/\s+/g, ' ');
-  m = s.match(/solicitud\s+fao\s*[-–—]\s*([^-–—]+?)\s*(?:[-–—]|$)/i);
-  if (m) return m[1].trim().replace(/\s+/g, ' ');
-  m = s.match(/solicitud\s+fao\s+(\S+)/i);
-  if (m && !/^(empresas?|monotributistas?)$/i.test(m[1])) return m[1].trim();
+  const limpiar = (x: string) =>
+    x.replace(/\b(empresas?|monotributistas?|mono)\b/gi, '')
+      .replace(/[()\-–—:]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  if (/\bfao\b/i.test(s)) {
+    const par = s.match(/\(([^)]+)\)/);
+    if (par) { const n = limpiar(par[1]); if (n) return n; }
+  }
+  const m = s.match(/\bfao\b\s*(.+)$/i);
+  if (m) {
+    let rest = m[1].replace(/^[\s\-–—:]+/, '');
+    rest = rest.split(/\b(?:para|de\s+ingreso|ingreso|egreso)\b|[-–—:|]/i)[0];
+    const n = limpiar(rest);
+    if (n) return n;
+  }
   return null;
 }
 
@@ -26,9 +36,13 @@ export default function SolicitudDetalle() {
   const { id } = useParams();
   const { data, reload } = useFetch<any>(`/solicitudes/${id}`, [id]);
   const { data: locales } = useFetch<any[]>('/locales', []);
+  const { data: tiposDoc } = useFetch<any[]>('/tipos-documento', []);
   const isAdmin = useAuth().user?.rol === 'ADMIN';
   const { notify } = useToast();
   const nav = useNavigate();
+
+  // Catálogo de requisitos EXTRA que se pueden agregar durante la revisión.
+  const catalogoExtra = (tiposDoc ?? []).filter((t: any) => t.categoria === 'EXTRA' && t.activo);
 
   const [revisando, setRevisando] = useState(false);
   const [confirmarTerminar, setConfirmarTerminar] = useState(false);
@@ -41,6 +55,10 @@ export default function SolicitudDetalle() {
   const [agregar, setAgregar] = useState(false);
   const [nuevaPersona, setNuevaPersona] = useState({ cuil: '', nombre: '', apellido: '', categoria: '' });
   const [edit, setEdit] = useState<{ personaId: number; cuil: string; nombre: string; apellido: string } | null>(null);
+  const [nuevoLocal, setNuevoLocal] = useState('');
+  const [reqPersona, setReqPersona] = useState<{ personaId: number; nombre: string } | null>(null);
+  const [reqSel, setReqSel] = useState('');
+  const [reqNombre, setReqNombre] = useState('');
 
   // Sincronizar el campo de vencimiento con lo que trae la solicitud.
   useEffect(() => { if (data?.solicitud) setVenc(data.solicitud.fechaVencimiento ?? ''); }, [data?.solicitud?.fechaVencimiento]);
@@ -85,6 +103,26 @@ export default function SolicitudDetalle() {
     const nuevo = await api.post<{ id: number }>('/locales', { nombre });
     await api.post(`/solicitudes/${solicitud.id}/local`, { localId: nuevo.id });
   }, `Local "${nombre}" creado y asignado.`);
+  const crearLocalLibre = () => {
+    const nombre = nuevoLocal.trim();
+    if (!nombre) { notify('Escribí el nombre del local.', 'error'); return; }
+    crearYAsignarLocal(nombre).then(() => setNuevoLocal(''));
+  };
+  const definirTipo = (categoria: string) => { if (categoria) run(() => api.post(`/solicitudes/${solicitud.id}/tipo`, { categoria }), 'Tipo de contratista definido.'); };
+  const abrirAgregarReq = (personaId: number, nombre: string) => { setReqPersona({ personaId, nombre }); setReqSel(''); setReqNombre(''); };
+  const agregarRequisito = async () => {
+    if (!reqPersona) return;
+    const body: any = { personaId: reqPersona.personaId, solicitudId: solicitud.id };
+    if (reqNombre.trim()) body.nombre = reqNombre.trim();
+    else if (reqSel) body.tipoDocumentoId = Number(reqSel);
+    else { notify('Elegí un requisito de la lista o escribí uno nuevo.', 'error'); return; }
+    await run(() => api.post('/documentos/requisitos', body), 'Requisito agregado.');
+    setReqPersona(null); setReqSel(''); setReqNombre('');
+  };
+  const quitarRequisito = (personaId: number, tipoDocumentoId: number, nombre: string) => {
+    if (!confirm(`¿Quitar el requisito "${nombre}"?`)) return;
+    run(() => api.del(`/documentos/requisitos/${personaId}/${tipoDocumentoId}`), 'Requisito quitado.');
+  };
   const addComentario = () => { if (!nuevoComentario.trim()) return; run(() => api.post(`/solicitudes/${solicitud.id}/comentarios`, { contenido: nuevoComentario }), 'Comentario agregado.').then(() => setNuevoComentario('')); };
   const agregarPersona = async () => {
     if (!nuevaPersona.cuil || !nuevaPersona.nombre || !nuevaPersona.apellido) { notify('Completá CUIL, nombre y apellido.', 'error'); return; }
@@ -119,7 +157,11 @@ export default function SolicitudDetalle() {
         )}
       </div>
       <div className="card-body">
-        <DocList docStatus={p.docStatus} personaId={p.personaId} onChanged={reload} />
+        <DocList docStatus={p.docStatus} personaId={p.personaId} onChanged={reload}
+          onQuitarRequisito={isAdmin ? (tipoId, nombre) => quitarRequisito(p.personaId, tipoId, nombre) : undefined} />
+        {isAdmin && (
+          <button className="btn ghost sm" style={{ marginTop: 8 }} onClick={() => abrirAgregarReq(p.personaId, `${p.apellido}, ${p.nombre}`)}>➕ Agregar requisito</button>
+        )}
         {p.estado === 'RECHAZADA' && p.motivoRechazo && <div className="alert error" style={{ marginTop: 10 }}>Rechazada: {p.motivoRechazo}</div>}
         {isAdmin && (
           <>
@@ -167,9 +209,22 @@ export default function SolicitudDetalle() {
           <span>⚠️ El local del asunto no coincide con ninguno cargado{localSugerido && <> — el email dice: <strong>“{localSugerido}”</strong></>}. Asignalo para poder autorizar:</span>
           {localSugerido && <button className="btn sm primary" disabled={busy} onClick={() => crearYAsignarLocal(localSugerido)}>➕ Crear “{localSugerido}” y asignar</button>}
           <select className="btn sm" onChange={(e) => asignarLocal(Number(e.target.value))} defaultValue="" disabled={busy}>
-            <option value="" disabled>o elegir uno existente…</option>
+            <option value="" disabled>elegir uno existente…</option>
             {(locales ?? []).filter((l) => l.nombre !== '(Sin asignar)').map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
           </select>
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <input value={nuevoLocal} onChange={(e) => setNuevoLocal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') crearLocalLibre(); }} placeholder="o escribir un local nuevo…" style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 8 }} />
+            <button className="btn sm" disabled={busy || !nuevoLocal.trim()} onClick={crearLocalLibre}>➕ Crear y asignar</button>
+          </span>
+        </div>
+      )}
+
+      {/* Definir el tipo de contratista si el asunto/cuerpo no lo declaró (define la documentación exigida). */}
+      {isAdmin && personas.length > 0 && (tipoSolicitud === null || tipoSolicitud === 'MIXTO') && (
+        <div className="alert info" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span>{tipoSolicitud === 'MIXTO' ? 'La solicitud tiene personas de distinto tipo.' : 'No se pudo determinar si es empresa o monotributista.'} Definí el tipo de contratista (fija qué documentación se exige):</span>
+          <button className="btn sm" disabled={busy} onClick={() => definirTipo('EMPRESA')}>Empresa</button>
+          <button className="btn sm" disabled={busy} onClick={() => definirTipo('MONOTRIBUTISTA')}>Monotributista</button>
         </div>
       )}
 
@@ -324,6 +379,24 @@ export default function SolicitudDetalle() {
               </select>
               <div className="hint">Define qué documentación se le exige.</div>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {reqPersona && (
+        <Modal title={`Agregar requisito — ${reqPersona.nombre}`} onClose={() => setReqPersona(null)}
+          footer={<><button className="btn" onClick={() => setReqPersona(null)}>Cancelar</button><button className="btn primary" onClick={agregarRequisito} disabled={busy}>Agregar</button></>}>
+          <div className="alert info">Documentación extra que se le exige solo a esta persona (ej. trabajo en altura). Queda como obligatoria hasta aprobarla.</div>
+          <div className="field">
+            <label>Elegir de la lista</label>
+            <select value={reqSel} onChange={(e) => { setReqSel(e.target.value); if (e.target.value) setReqNombre(''); }}>
+              <option value="">— elegir —</option>
+              {catalogoExtra.map((t: any) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>o escribir uno nuevo</label>
+            <input value={reqNombre} onChange={(e) => { setReqNombre(e.target.value); if (e.target.value) setReqSel(''); }} placeholder="Ej: Permiso de trabajo en caliente" />
           </div>
         </Modal>
       )}

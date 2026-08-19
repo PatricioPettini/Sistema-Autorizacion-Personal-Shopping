@@ -212,6 +212,22 @@ export const solicitudPersonas = sqliteTable(
   (t) => ({ uq: unique('sol_persona_uq').on(t.solicitudId, t.personaId), solIdx: index('solper_sol_idx').on(t.solicitudId) }),
 );
 
+// Requisitos de documentación EXTRA para una persona puntual (además de los de su
+// categoría). Se cargan durante la revisión: ej. "trabajo en altura".
+export const requisitosPersona = sqliteTable(
+  'requisitos_persona',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    personaId: integer('persona_id').notNull().references(() => personas.id),
+    tipoDocumentoId: integer('tipo_documento_id').notNull().references(() => documentTypes.id),
+    // Solicitud desde la que se agregó (provenance/auditoría). El requisito es de la persona.
+    solicitudId: integer('solicitud_id').references(() => solicitudes.id),
+    createdByUserId: integer('created_by_user_id').references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => ({ uq: unique('req_persona_tipo_uq').on(t.personaId, t.tipoDocumentoId), personaIdx: index('req_persona_idx').on(t.personaId) }),
+);
+
 export const aiAnalyses = sqliteTable('ai_analyses', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   solicitudId: integer('solicitud_id').references(() => solicitudes.id),

@@ -128,6 +128,78 @@ export async function documentosRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // --- Requisitos EXTRA por persona (ej. trabajo en altura) ---
+  // Se puede elegir un tipo del catálogo EXTRA (tipoDocumentoId) o crear uno nuevo por nombre.
+  const requisitoSchema = z
+    .object({
+      personaId: z.number().int(),
+      tipoDocumentoId: z.number().int().optional(),
+      nombre: z.string().trim().min(2).optional(),
+      solicitudId: z.number().int().optional(),
+    })
+    .refine((d) => d.tipoDocumentoId != null || !!d.nombre, { message: 'Elegí o escribí el requisito.' });
+
+  /** Genera un código único para un tipo EXTRA nuevo a partir del nombre. */
+  const codigoDesdeNombre = (nombre: string): string => {
+    const base =
+      'EXTRA_' +
+      nombre
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40);
+    let codigo = base || 'EXTRA_REQ';
+    let n = 2;
+    while (db.select().from(schema.documentTypes).where(eq(schema.documentTypes.codigo, codigo)).get()) {
+      codigo = `${base}_${n++}`;
+    }
+    return codigo;
+  };
+
+  app.post('/requisitos', soloAdmin, async (req) => {
+    const data = requisitoSchema.parse(req.body);
+    const persona = db.select().from(schema.personas).where(eq(schema.personas.id, data.personaId)).get();
+    if (!persona) throw notFound('Persona no encontrada.');
+
+    // Resolver el tipo: existente por id, o crear uno EXTRA nuevo por nombre.
+    let tipoId = data.tipoDocumentoId ?? 0;
+    if (!tipoId) {
+      const nombre = data.nombre!.slice(0, 120);
+      const codigo = codigoDesdeNombre(nombre);
+      const tipo = db
+        .insert(schema.documentTypes)
+        .values({ codigo, nombre, obligatorio: true, tieneVencimiento: false, categoria: 'EXTRA', controlaEmision: false, orden: 60, activo: true })
+        .returning()
+        .get();
+      tipoId = tipo.id;
+      audit({ userId: req.user!.id, accion: 'TIPO_DOC_CREADO', entidad: 'document_type', entidadId: tipoId, detalle: { codigo, extra: true }, ip: req.ip });
+    } else {
+      const tipo = db.select().from(schema.documentTypes).where(eq(schema.documentTypes.id, tipoId)).get();
+      if (!tipo) throw notFound('Tipo de documento no encontrado.');
+    }
+
+    db.insert(schema.requisitosPersona)
+      .values({ personaId: data.personaId, tipoDocumentoId: tipoId, solicitudId: data.solicitudId ?? null, createdByUserId: req.user!.id })
+      .onConflictDoNothing()
+      .run();
+    audit({ userId: req.user!.id, accion: 'REQUISITO_AGREGADO', entidad: 'persona', entidadId: data.personaId, detalle: { tipoDocumentoId: tipoId, solicitudId: data.solicitudId }, ip: req.ip });
+    recomputeAutorizacionesDePersona(data.personaId, req.user!.id);
+    return { ok: true, tipoDocumentoId: tipoId };
+  });
+
+  app.delete('/requisitos/:personaId/:tipoDocumentoId', soloAdmin, async (req) => {
+    const personaId = Number((req.params as any).personaId);
+    const tipoDocumentoId = Number((req.params as any).tipoDocumentoId);
+    db.delete(schema.requisitosPersona)
+      .where(and(eq(schema.requisitosPersona.personaId, personaId), eq(schema.requisitosPersona.tipoDocumentoId, tipoDocumentoId)))
+      .run();
+    audit({ userId: req.user!.id, accion: 'REQUISITO_QUITADO', entidad: 'persona', entidadId: personaId, detalle: { tipoDocumentoId }, ip: req.ip });
+    recomputeAutorizacionesDePersona(personaId, req.user!.id);
+    return { ok: true };
+  });
+
   // --- Reclasificar: corregir el tipo que la IA detectó mal ---
   app.post('/:documentoId/reclasificar', soloAdmin, async (req) => {
     const documentoId = Number((req.params as any).documentoId);

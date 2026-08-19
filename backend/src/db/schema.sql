@@ -157,6 +157,20 @@ CREATE TABLE IF NOT EXISTS solicitud_personas (
 );
 CREATE INDEX IF NOT EXISTS solper_sol_idx ON solicitud_personas(solicitud_id);
 
+-- Requisitos de documentación EXTRA asignados a una persona puntual (ej. trabajo en
+-- altura), además de los que exige su categoría (empresa/monotributista). Se agregan
+-- durante la revisión. El tipo referenciado suele tener categoria='EXTRA' (no auto-aplica).
+CREATE TABLE IF NOT EXISTS requisitos_persona (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  persona_id INTEGER NOT NULL REFERENCES personas(id),
+  tipo_documento_id INTEGER NOT NULL REFERENCES document_types(id),
+  solicitud_id INTEGER REFERENCES solicitudes(id),
+  created_by_user_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  CONSTRAINT req_persona_tipo_uq UNIQUE (persona_id, tipo_documento_id)
+);
+CREATE INDEX IF NOT EXISTS req_persona_idx ON requisitos_persona(persona_id);
+
 CREATE TABLE IF NOT EXISTS ai_analyses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitud_id INTEGER REFERENCES solicitudes(id),

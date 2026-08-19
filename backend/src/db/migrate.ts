@@ -15,6 +15,15 @@ const DEFAULT_DOCUMENT_TYPES = [
   { codigo: 'CLAUSULA_NO_REPETICION', nombre: 'Cláusula de No Repetición (a favor de Cencosud SA)', obligatorio: true, categoria: 'AMBOS', controlaEmision: false, orden: 6 },
 ];
 
+// Requisitos EXTRA (categoria='EXTRA'): NO se aplican por categoría. Son un catálogo
+// para elegir durante la revisión y asignárselos a una persona puntual (ej. trabajo en altura).
+const EXTRA_DOCUMENT_TYPES = [
+  { codigo: 'TRABAJO_ALTURA', nombre: 'Certificado de trabajo en altura', orden: 50 },
+  { codigo: 'SEGURO_ACCIDENTES', nombre: 'Seguro de accidentes personales', orden: 51 },
+  { codigo: 'APTO_MEDICO', nombre: 'Apto médico', orden: 52 },
+  { codigo: 'SEG_HIGIENE', nombre: 'Curso de seguridad e higiene', orden: 53 },
+];
+
 // Tipos viejos que ya no aplican (se desactivan, no se borran para conservar historial).
 const OBSOLETE_CODES = ['DNI', 'ART', 'SEGURO_VIDA', 'MONOTRIBUTO'];
 
@@ -120,6 +129,17 @@ export function ensureDefaultDocumentTypes(): void {
            activo = 1`,
       )
       .run(dt.codigo, dt.nombre, dt.obligatorio ? 1 : 0, dt.categoria, dt.controlaEmision ? 1 : 0, dt.orden);
+  }
+  // Catálogo EXTRA: obligatorio cuando se asigna, pero categoria='EXTRA' => no auto-aplica.
+  // No pisamos 'nombre' ni 'activo' si el admin ya lo editó (solo garantizamos que exista).
+  for (const dt of EXTRA_DOCUMENT_TYPES) {
+    rawDb
+      .prepare(
+        `INSERT INTO document_types (codigo, nombre, obligatorio, tiene_vencimiento, categoria, controla_emision, orden, activo)
+         VALUES (?, ?, 1, 0, 'EXTRA', 0, ?, 1)
+         ON CONFLICT(codigo) DO NOTHING`,
+      )
+      .run(dt.codigo, dt.nombre, dt.orden);
   }
   for (const codigo of OBSOLETE_CODES) {
     rawDb.prepare(`UPDATE document_types SET activo = 0 WHERE codigo = ?`).run(codigo);

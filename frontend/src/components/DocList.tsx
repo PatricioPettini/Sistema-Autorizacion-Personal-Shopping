@@ -7,14 +7,16 @@ interface Item {
   tipoId: number; codigo: string; nombre: string; obligatorio: boolean; presente: boolean; tieneArchivo: boolean;
   versionId: number | null; version: number | null; fechaEmision: string | null; fechaVencimiento: string | null;
   diasParaVencer: number | null; vigencia: string | null; documentoId: number | null; controlaEmision: boolean;
+  esRequisitoExtra?: boolean;
   verificacion: 'PENDIENTE' | 'VERIFICADO' | 'RECHAZADO'; notaVerificacion: string | null; clasificacionConfianza: number | null;
 }
 interface DocStatus { items: Item[]; faltantes: string[]; estadoDocumental: string; completos: number; totalObligatorios: number; categoria?: string | null; requiereCategoria?: boolean; }
 
-export function DocList({ docStatus, personaId, onChanged }: {
+export function DocList({ docStatus, personaId, onChanged, onQuitarRequisito }: {
   docStatus?: DocStatus;
   personaId?: number;
   onChanged?: () => void;
+  onQuitarRequisito?: (tipoId: number, nombre: string) => void;
 }) {
   const { notify } = useToast();
   const isAdmin = useAuth().user?.rol === 'ADMIN';
@@ -58,9 +60,13 @@ export function DocList({ docStatus, personaId, onChanged }: {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   {it.nombre}
+                  {it.esRequisitoExtra && <span className="chip" title="Requisito agregado a esta persona">extra</span>}
                   {!it.obligatorio && <span className="chip">opcional</span>}
                   {it.verificacion === 'VERIFICADO' && <span className="badge green">✓ Aprobado</span>}
                   {it.verificacion === 'RECHAZADO' && <span className="badge red">Rechazado</span>}
+                  {it.esRequisitoExtra && onQuitarRequisito && (
+                    <button className="btn ghost sm" style={{ marginLeft: 'auto' }} onClick={() => onQuitarRequisito(it.tipoId, it.nombre)}>Quitar requisito</button>
+                  )}
                 </div>
                 {it.notaVerificacion && <div className="muted" style={{ fontSize: 12.5 }}>Nota: {it.notaVerificacion}</div>}
 
