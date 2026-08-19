@@ -7,11 +7,35 @@ import { notFound } from '../../lib/errors.js';
 
 const MIME: Record<string, string> = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' };
 
+// Cache del email parseado. Parsear un .eml (con sus adjuntos) es caro; el visor pide
+// la lista y después cada PDF por separado, así que sin cache se re-parsea el mismo mail
+// muchas veces seguidas. Guardamos los últimos por id+mtime, con TTL corto.
+type ParsedEmail = Awaited<ReturnType<typeof simpleParser>>;
+const parseCache = new Map<number, { mtimeMs: number; parsed: ParsedEmail; at: number }>();
+const CACHE_MAX = 4;
+const CACHE_TTL_MS = 3 * 60 * 1000;
+
 async function parseEmail(emailId: number) {
   const email = db.select().from(schema.emailMessages).where(eq(schema.emailMessages.id, emailId)).get();
   if (!email) throw notFound('Email no encontrado.');
   if (!email.rawStoredPath || !fs.existsSync(email.rawStoredPath)) throw notFound('El email no está disponible en el almacenamiento.');
+
+  const mtimeMs = fs.statSync(email.rawStoredPath).mtimeMs;
+  const hit = parseCache.get(emailId);
+  if (hit && hit.mtimeMs === mtimeMs && Date.now() - hit.at < CACHE_TTL_MS) {
+    hit.at = Date.now();
+    return { email, parsed: hit.parsed };
+  }
+
   const parsed = await simpleParser(fs.readFileSync(email.rawStoredPath));
+  parseCache.set(emailId, { mtimeMs, parsed, at: Date.now() });
+  // Evitar que el cache crezca: descartar el más viejo.
+  if (parseCache.size > CACHE_MAX) {
+    let oldestId = -1;
+    let oldestAt = Infinity;
+    for (const [id, v] of parseCache) if (v.at < oldestAt) { oldestAt = v.at; oldestId = id; }
+    if (oldestId >= 0) parseCache.delete(oldestId);
+  }
   return { email, parsed };
 }
 
