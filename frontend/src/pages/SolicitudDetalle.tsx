@@ -56,6 +56,7 @@ export default function SolicitudDetalle() {
   const [nuevaPersona, setNuevaPersona] = useState({ cuil: '', nombre: '', apellido: '', categoria: '' });
   const [edit, setEdit] = useState<{ personaId: number; cuil: string; nombre: string; apellido: string } | null>(null);
   const [nuevoLocal, setNuevoLocal] = useState('');
+  const [cambiandoLocal, setCambiandoLocal] = useState(false);
   const [reqPersona, setReqPersona] = useState<{ personaId: number; nombre: string } | null>(null);
   const [reqSel, setReqSel] = useState('');
   const [reqNombre, setReqNombre] = useState('');
@@ -101,11 +102,11 @@ export default function SolicitudDetalle() {
     } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(false); }
   };
 
-  const asignarLocal = (localId: number) => { if (localId) run(() => api.post(`/solicitudes/${solicitud.id}/local`, { localId }), 'Local asignado.'); };
+  const asignarLocal = (localId: number) => { if (localId) run(() => api.post(`/solicitudes/${solicitud.id}/local`, { localId }), 'Local asignado.').then(() => setCambiandoLocal(false)); };
   const crearYAsignarLocal = (nombre: string) => run(async () => {
     const nuevo = await api.post<{ id: number }>('/locales', { nombre });
     await api.post(`/solicitudes/${solicitud.id}/local`, { localId: nuevo.id });
-  }, `Local "${nombre}" creado y asignado.`);
+  }, `Local "${nombre}" creado y asignado.`).then(() => setCambiandoLocal(false));
   const crearLocalLibre = () => {
     const nombre = nuevoLocal.trim();
     if (!nombre) { notify('Escribí el nombre del local.', 'error'); return; }
@@ -192,7 +193,9 @@ export default function SolicitudDetalle() {
       <div className="page-head">
         <div>
           <a className="muted" onClick={() => nav('/solicitudes')} style={{ cursor: 'pointer' }}>← Solicitudes</a>
-          <h1 style={{ marginTop: 6 }}>{sinLocal ? <span className="badge orange">Local sin asignar</span> : local.nombre}</h1>
+          <h1 style={{ marginTop: 6 }}>{sinLocal ? <span className="badge orange">Local sin asignar</span> : local.nombre}
+            {isAdmin && !sinLocal && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setCambiandoLocal((v) => !v)} title="Cambiar el local de esta solicitud">✎ Cambiar local</button>}
+          </h1>
           <div className="subtitle">
             {solicitud.nroOrden && <><span className="chip" title="Número de orden de la revisión">Orden {solicitud.nroOrden}</span>{' · '}</>}
             {personas.length} {personas.length === 1 ? 'persona' : 'personas'}
@@ -216,18 +219,21 @@ export default function SolicitudDetalle() {
         </div>
       </div>
 
-      {isAdmin && sinLocal && (
-        <div className="alert warn" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span>⚠️ El local del asunto no coincide con ninguno cargado{localSugerido && <> — el email dice: <strong>“{localSugerido}”</strong></>}. Asignalo para poder autorizar:</span>
-          {localSugerido && <button className="btn sm primary" disabled={busy} onClick={() => crearYAsignarLocal(localSugerido)}>➕ Crear “{localSugerido}” y asignar</button>}
+      {isAdmin && (sinLocal || cambiandoLocal) && (
+        <div className={`alert ${sinLocal ? 'warn' : 'info'}`} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {sinLocal
+            ? <span>⚠️ El local del asunto no coincide con ninguno cargado{localSugerido && <> — el email dice: <strong>“{localSugerido}”</strong></>}. Asignalo para poder autorizar:</span>
+            : <span>Cambiar el local de esta solicitud (hoy: <strong>{local.nombre}</strong>). Elegí uno cargado o escribí uno nuevo:</span>}
+          {sinLocal && localSugerido && <button className="btn sm primary" disabled={busy} onClick={() => crearYAsignarLocal(localSugerido)}>➕ Crear “{localSugerido}” y asignar</button>}
           <select className="btn sm" onChange={(e) => asignarLocal(Number(e.target.value))} defaultValue="" disabled={busy}>
             <option value="" disabled>elegir uno existente…</option>
-            {(locales ?? []).filter((l) => l.nombre !== '(Sin asignar)').map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
+            {(locales ?? []).filter((l) => l.nombre !== '(Sin asignar)' && l.id !== local.id).map((l) => <option key={l.id} value={l.id}>{l.nombre}</option>)}
           </select>
           <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <input value={nuevoLocal} onChange={(e) => setNuevoLocal(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') crearLocalLibre(); }} placeholder="o escribir un local nuevo…" style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 8 }} />
             <button className="btn sm" disabled={busy || !nuevoLocal.trim()} onClick={crearLocalLibre}>➕ Crear y asignar</button>
           </span>
+          {!sinLocal && <button className="btn ghost sm" disabled={busy} onClick={() => { setCambiandoLocal(false); setNuevoLocal(''); }}>Cancelar</button>}
         </div>
       )}
 
