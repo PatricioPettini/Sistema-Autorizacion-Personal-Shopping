@@ -1,5 +1,6 @@
 import AdmZip from 'adm-zip';
 import path from 'node:path';
+import { parseXls } from './xls.js';
 
 /**
  * Lectores mínimos de planillas SIN dependencias externas. Soportamos los formatos
@@ -187,10 +188,13 @@ export function parseSpreadsheet(filename: string, buffer: Buffer): string[][] {
   if (ext === '.ods') return parseOds(buffer);
   if (ext === '.csv' || ext === '.tsv' || ext === '.txt') return parseDelimited(buffer);
   if (ext === '.xlsx' || ext === '.xlsm') return parseXlsx(buffer);
-  // Sin extensión reconocible: probar por contenido (ZIP → xlsx u ods; si no, texto).
-  const rows = parseXlsx(buffer);
+  if (ext === '.xls') return parseXls(buffer);
+  // Sin extensión reconocible: probar por contenido.
+  // OLE2 (.xls viejo) empieza con la firma D0CF11E0.
+  if (buffer.length >= 8 && buffer.readUInt32LE(0) === 0xe011cfd0) { const x = parseXls(buffer); if (x.length) return x; }
+  const rows = parseXlsx(buffer); // ZIP → xlsx
   if (rows.length) return rows;
-  const ods = parseOds(buffer);
+  const ods = parseOds(buffer); // ZIP → ods
   if (ods.length) return ods;
   return parseDelimited(buffer);
 }
