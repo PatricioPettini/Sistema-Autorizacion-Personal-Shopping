@@ -69,6 +69,9 @@ export default function SolicitudDetalle() {
   const localSugerido = localFromAsunto(email?.asunto);
   const catsSolicitud = new Set<string>(personas.map((p: any) => p.docStatus?.categoria).filter(Boolean));
   const tipoSolicitud = catsSolicitud.size === 0 ? null : catsSolicitud.size === 1 ? [...catsSolicitud][0] : 'MIXTO';
+  // No se puede terminar la revisión si a alguna persona le falta el tipo (empresa/monotributo).
+  const personasSinTipo = (personas as any[]).filter((p: any) => !p.docStatus?.categoria);
+  const faltaTipo = personasSinTipo.length > 0;
   const fechaVenc = solicitud.fechaVencimiento as string | null;
 
   const run = async (fn: () => Promise<any>, ok: string) => {
@@ -292,7 +295,8 @@ export default function SolicitudDetalle() {
         <Modal full title={`Revisión — ${sinLocal ? 'Local sin asignar' : local.nombre}`} onClose={() => setRevisando(false)}
           footer={<>
             <button className="btn" onClick={() => setRevisando(false)}>Cerrar</button>
-            <button className="btn primary" onClick={() => setConfirmarTerminar(true)} disabled={busy}>✅ Terminar revisión y avisar al remitente</button>
+            {faltaTipo && <span className="muted" style={{ fontSize: 12.5, alignSelf: 'center' }}>⚠ Definí si es empresa o monotributista para poder terminar.</span>}
+            <button className="btn primary" onClick={() => setConfirmarTerminar(true)} disabled={busy || faltaTipo} title={faltaTipo ? 'Falta definir el tipo de contratista (empresa/monotributista).' : undefined}>✅ Terminar revisión y avisar al remitente</button>
           </>}>
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {/* Barra de vigencia (fecha única de la solicitud) */}

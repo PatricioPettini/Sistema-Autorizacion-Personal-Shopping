@@ -374,6 +374,21 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     const id = Number((req.params as any).id);
     const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
     if (!sol) throw notFound('Solicitud no encontrada.');
+
+    // No se puede terminar la revisión (ni avisar por email) si no está definido el
+    // tipo de contratista de cada persona: sin eso no sabemos qué documentación exigir.
+    const sinTipo = db
+      .select({ nombre: schema.personas.nombre, apellido: schema.personas.apellido })
+      .from(schema.solicitudPersonas)
+      .innerJoin(schema.personas, eq(schema.personas.id, schema.solicitudPersonas.personaId))
+      .where(and(eq(schema.solicitudPersonas.solicitudId, id), isNull(schema.personas.categoria)))
+      .all();
+    if (sinTipo.length > 0) {
+      const quienes = sinTipo.slice(0, 5).map((p) => `${p.apellido}, ${p.nombre}`).join('; ');
+      const extra = sinTipo.length > 5 ? ` y ${sinTipo.length - 5} más` : '';
+      throw badRequest(`Falta definir si es Empresa o Monotributista en: ${quienes}${extra}. Asigná el tipo de contratista antes de terminar la revisión.`);
+    }
+
     // El número se asigna al cerrar la revisión, aunque el email no se pueda enviar:
     // identifica la revisión igual. Si ya tenía uno (reenvío), se conserva.
     const nroOrden = asignarNroOrden(id);

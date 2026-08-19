@@ -55,6 +55,25 @@ export function safeJoin(base: string, ...segments: string[]): string {
   return target;
 }
 
+/**
+ * Arma un header Content-Disposition válido para cualquier nombre de archivo.
+ * Los nombres con acentos, comillas, saltos de línea o caracteres no-ASCII rompen
+ * el header (Node tira ERR_INVALID_CHAR). Usamos un fallback ASCII seguro y el
+ * nombre real en `filename*` (RFC 5987), que entienden todos los navegadores.
+ */
+export function contentDisposition(tipo: 'inline' | 'attachment', filename?: string | null): string {
+  const nombre = (filename && filename.trim()) || 'archivo';
+  // Fallback ASCII: sin acentos, sin caracteres de control ni comillas/backslash.
+  const ascii = nombre
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\uffff"\\]/g, '_')
+    .trim() || 'archivo';
+  const utf8 = encodeURIComponent(nombre).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `${tipo}; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
 export function sha256(buffer: Buffer): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }

@@ -5,7 +5,7 @@ import { eq, and, desc } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, notFound, conflict } from '../../lib/errors.js';
-import { isAllowedFile } from '../../lib/files.js';
+import { isAllowedFile, contentDisposition } from '../../lib/files.js';
 import { saveDocumentVersion } from '../storage/service.js';
 import { nowIso } from '../../lib/datetime.js';
 import { env } from '../../config/env.js';
@@ -48,7 +48,7 @@ export async function documentosRoutes(app: FastifyInstance) {
     reply.header('Content-Type', MIME[ext] ?? 'application/octet-stream');
     reply.header(
       'Content-Disposition',
-      `${download ? 'attachment' : 'inline'}; filename="${version.normalizedFilename ?? version.originalFilename}"`,
+      contentDisposition(download ? 'attachment' : 'inline', version.normalizedFilename ?? version.originalFilename),
     );
     if (download) {
       audit({ userId: req.user!.id, accion: 'DOCUMENTO_DESCARGADO', entidad: 'document_version', entidadId: id, ip: req.ip });

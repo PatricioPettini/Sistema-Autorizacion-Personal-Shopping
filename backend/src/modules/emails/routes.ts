@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { simpleParser } from 'mailparser';
 import { db, schema } from '../../db/client.js';
 import { notFound } from '../../lib/errors.js';
+import { contentDisposition } from '../../lib/files.js';
 
 const MIME: Record<string, string> = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png' };
 
@@ -70,7 +71,7 @@ export async function emailsRoutes(app: FastifyInstance) {
     if (!att) throw notFound('Adjunto no encontrado.');
     const ext = (att.filename ?? '').split('.').pop()?.toLowerCase() ?? '';
     reply.header('Content-Type', att.contentType || MIME[ext] || 'application/octet-stream');
-    reply.header('Content-Disposition', `inline; filename="${att.filename ?? 'adjunto'}"`);
+    reply.header('Content-Disposition', contentDisposition('inline', att.filename ?? 'adjunto'));
     return reply.send(att.content as Buffer);
   });
 }
