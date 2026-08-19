@@ -13,6 +13,7 @@ import { parsePersonasSpreadsheet } from '../../lib/xlsx.js';
 import { findOrCreateLocal } from '../locales/service.js';
 import { recomputeSolicitudEstado, asignarNroOrden } from '../solicitudes/service.js';
 import { sendMail } from '../email/mailer.js';
+import { parsePersonasFromBody } from './body-table.js';
 
 /** Extrae la dirección de un "Nombre <addr@dom>" o devuelve el texto si ya es una dirección. */
 function extraerEmail(remitente: string | null | undefined): string {
@@ -168,7 +169,14 @@ export async function processEmail(emailId: number, opts: { force?: boolean } = 
     // El Excel de personas es OPCIONAL. Si no viene (o no se puede leer), la solicitud
     // se crea igual y el admin carga las personas a mano desde el detalle.
     const excel = items.find((it) => esExcel(it.filename));
-    const filas = excel ? parsePersonasSpreadsheet(excel.filename, excel.buffer) : [];
+    let filas = excel ? parsePersonasSpreadsheet(excel.filename, excel.buffer) : [];
+    // Si no hubo Excel (o no se pudo leer), buscar la lista de personas en el CUERPO del email
+    // (tabla HTML o texto plano con CUIL + nombre).
+    let origenPersonas: 'excel' | 'cuerpo' | null = filas.length ? 'excel' : null;
+    if (filas.length === 0) {
+      const desdeCuerpo = parsePersonasFromBody(parsed.html || undefined, parsed.text || undefined);
+      if (desdeCuerpo.length) { filas = desdeCuerpo; origenPersonas = 'cuerpo'; }
+    }
 
     // Límite operativo/anti-sobrecarga: una planilla con demasiadas personas no se puede revisar
     // a mano (y una enorme, ej. 3300, cuelga el sistema). No se crea la solicitud: se avisa al
@@ -189,11 +197,11 @@ Por favor divida el pedido en solicitudes de hasta ${MAX_PERSONAS_PLANILLA} pers
       return;
     }
 
-    const avisoPersonas = !excel
-      ? 'El email no trae Excel de personas: cargalas a mano en la solicitud.'
-      : filas.length === 0
-        ? 'No se pudieron leer personas del Excel (revisá las columnas CUIL y Nombre completo): cargalas a mano en la solicitud.'
-        : null;
+    const avisoPersonas = filas.length > 0
+      ? null
+      : !excel
+        ? 'El email no trae Excel ni una tabla de personas legible en el cuerpo: cargalas a mano en la solicitud.'
+        : 'No se pudieron leer personas del Excel (revisá las columnas CUIL y Nombre completo): cargalas a mano en la solicitud.';
     if (avisoPersonas) audit({ accion: 'EMAIL_SIN_PERSONAS', entidad: 'email', entidadId: emailId, detalle: { motivo: avisoPersonas } });
 
     // Reusar la solicitud de este email si ya existe (idempotencia); si no, crearla.
@@ -257,7 +265,7 @@ Por favor divida el pedido en solicitudes de hasta ${MAX_PERSONAS_PLANILLA} pers
     // Siempre PROCESSED: si el local no se identificó, la solicitud queda "(Sin asignar)"
     // y el admin la reasigna desde Solicitudes (ya no existe la bandeja de Revisión manual).
     setEmailEstado(emailId, 'PROCESSED', avisoPersonas);
-    audit({ accion: 'EMAIL_PROCESADO', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, localDetectado: detectedLocalId, aviso: avisoPersonas } });
+    audit({ accion: 'EMAIL_PROCESADO', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, origenPersonas, localDetectado: detectedLocalId, aviso: avisoPersonas } });
   } catch (err: any) {
     logger.error({ err }, `Error procesando email ${emailId}`);
     setEmailEstado(emailId, 'ERROR', err?.message ?? 'Error desconocido.');
