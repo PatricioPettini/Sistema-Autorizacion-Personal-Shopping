@@ -193,7 +193,16 @@ export default function SolicitudDetalle() {
           <div className="subtitle">
             {solicitud.nroOrden && <><span className="chip" title="Número de orden de la revisión">Orden {solicitud.nroOrden}</span>{' · '}</>}
             {personas.length} {personas.length === 1 ? 'persona' : 'personas'}
-            {' · '}Tipo: <strong>{tipoLabel(tipoSolicitud)}</strong>
+            {' · '}Tipo:{' '}
+            {isAdmin && personas.length > 0
+              ? <select value={tipoSolicitud === 'EMPRESA' || tipoSolicitud === 'MONOTRIBUTISTA' ? tipoSolicitud : ''} disabled={busy}
+                  onChange={(e) => definirTipo(e.target.value)} title="Cambiar tipo de contratista (define la documentación exigida)"
+                  style={{ padding: '2px 6px', border: '1px solid var(--border)', borderRadius: 6 }}>
+                  <option value="" disabled>{tipoSolicitud === 'MIXTO' ? 'Mixto — elegir…' : 'definir…'}</option>
+                  <option value="EMPRESA">Empresa</option>
+                  <option value="MONOTRIBUTISTA">Monotributista</option>
+                </select>
+              : <strong>{tipoLabel(tipoSolicitud)}</strong>}
             {' · '}<Badge estado={solicitud.estado} />
             {fechaVenc && <> {' · '}Vigencia hasta <strong>{fmtSoloFecha(fechaVenc)}</strong></>}
           </div>
