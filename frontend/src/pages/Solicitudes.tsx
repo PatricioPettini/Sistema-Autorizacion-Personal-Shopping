@@ -44,6 +44,18 @@ export default function Solicitudes() {
   const [pegar, setPegar] = useState(false);
   const [pegado, setPegado] = useState('');
   const [busy, setBusy] = useState(false);
+  const [eliminando, setEliminando] = useState<number | null>(null);
+
+  const eliminar = async (r: Row) => {
+    const n = r.personasCount;
+    if (!confirm(`¿Eliminar la solicitud de "${r.local}"${n ? ` (${n} ${n === 1 ? 'persona' : 'personas'})` : ''}?\n\nSe borra la solicitud y las personas que no tengan otra solicitud ni ingresos registrados. Esta acción no se puede deshacer.`)) return;
+    setEliminando(r.id);
+    try {
+      const res = await api.del<{ ok: boolean; personasEliminadas: number }>(`/solicitudes/${r.id}`);
+      notify(`Solicitud eliminada${res.personasEliminadas ? ` (${res.personasEliminadas} ${res.personasEliminadas === 1 ? 'persona borrada' : 'personas borradas'})` : ''}.`, 'success');
+      reload();
+    } catch (e: any) { notify(e.message, 'error'); } finally { setEliminando(null); }
+  };
 
   const localesReales = (locales ?? []).filter((l) => l.nombre !== '(Sin asignar)');
 
@@ -167,9 +179,9 @@ export default function Solicitudes() {
         <div className="table-wrap">
           {loading ? <div className="card-body"><Spinner /></div> : (
             <table className="tbl">
-              <thead><tr><th>Orden</th><th>Local</th><th>Tipo</th><th>Personas</th><th>Estado</th><th>Enviado</th><th>Actualizado</th></tr></thead>
+              <thead><tr><th>Orden</th><th>Local</th><th>Tipo</th><th>Personas</th><th>Estado</th><th>Enviado</th><th>Actualizado</th>{isAdmin && <th></th>}</tr></thead>
               <tbody>
-                {data?.length === 0 && <tr><td colSpan={7} className="empty">No hay solicitudes con esos filtros.</td></tr>}
+                {data?.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className="empty">No hay solicitudes con esos filtros.</td></tr>}
                 {data?.map((r) => (
                   <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/solicitudes/${r.id}`)}>
                     <td>{r.nroOrden ? <span className="chip">{r.nroOrden}</span> : <span className="muted">—</span>}</td>
@@ -182,6 +194,7 @@ export default function Solicitudes() {
                     <td><Badge estado={r.estado} /></td>
                     <td className="muted">{fmtFecha(r.fecha)}</td>
                     <td className="muted">{fmtFecha(r.updatedAt)}</td>
+                    {isAdmin && <td onClick={(e) => e.stopPropagation()}><button className="btn ghost sm" title="Eliminar solicitud" disabled={eliminando === r.id} onClick={() => eliminar(r)}>{eliminando === r.id ? '…' : '🗑'}</button></td>}
                   </tr>
                 ))}
               </tbody>

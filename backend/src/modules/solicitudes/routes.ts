@@ -258,6 +258,36 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     return { personaId: persona.id };
   });
 
+  // Eliminar una solicitud completa (admin). Borra sus vínculos y limpia las personas que
+  // quedan huérfanas (sin otra solicitud, sin ingresos). Útil para depurar cargas erróneas.
+  app.delete('/:id', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
+    if (!sol) throw notFound('Solicitud no encontrada.');
+    const personaIds = db.select({ personaId: schema.solicitudPersonas.personaId }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, id)).all().map((r) => r.personaId);
+
+    db.delete(schema.autorizaciones).where(eq(schema.autorizaciones.solicitudId, id)).run();
+    db.delete(schema.aiAnalyses).where(eq(schema.aiAnalyses.solicitudId, id)).run();
+    db.delete(schema.comentarios).where(eq(schema.comentarios.solicitudId, id)).run();
+    db.delete(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, id)).run();
+    db.delete(schema.solicitudes).where(eq(schema.solicitudes.id, id)).run();
+
+    // Limpiar personas huérfanas (creadas por esta carga y sin otro uso).
+    for (const personaId of personaIds) {
+      const enOtra = db.select({ n: sql<number>`count(*)` }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.personaId, personaId)).get()?.n ?? 0;
+      const conIngreso = db.select({ n: sql<number>`count(*)` }).from(schema.entradas).where(eq(schema.entradas.personaId, personaId)).get()?.n ?? 0;
+      if (enOtra === 0 && conIngreso === 0) {
+        const docs = db.select({ id: schema.documentos.id }).from(schema.documentos).where(eq(schema.documentos.personaId, personaId)).all();
+        for (const d of docs) db.delete(schema.documentVersions).where(eq(schema.documentVersions.documentoId, d.id)).run();
+        db.delete(schema.documentos).where(eq(schema.documentos.personaId, personaId)).run();
+        db.delete(schema.autorizaciones).where(eq(schema.autorizaciones.personaId, personaId)).run();
+        db.delete(schema.personas).where(eq(schema.personas.id, personaId)).run();
+      }
+    }
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_ELIMINADA', entidad: 'solicitud', entidadId: id, detalle: { personas: personaIds.length }, ip: req.ip });
+    return { ok: true, personasEliminadas: personaIds.length };
+  });
+
   // Quitar una persona de la solicitud (no borra a la persona ni su documentación).
   app.delete('/:id/personas/:personaId', soloAdmin, async (req) => {
     const id = Number((req.params as any).id);

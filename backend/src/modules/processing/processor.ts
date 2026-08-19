@@ -18,6 +18,10 @@ interface FileItem {
   buffer: Buffer;
 }
 
+// Máximo de personas que se procesan automáticamente desde una planilla. Por encima de esto
+// el email se manda a revisión manual (protección: evita que una planilla enorme cuelgue el sistema).
+const MAX_PERSONAS_PLANILLA = 300;
+
 function setEmailEstado(emailId: number, estado: string, error?: string | null) {
   db.update(schema.emailMessages).set({ estado, error: error ?? null, updatedAt: nowIso() }).where(eq(schema.emailMessages.id, emailId)).run();
 }
@@ -130,6 +134,17 @@ export async function processEmail(emailId: number): Promise<void> {
     // se crea igual y el admin carga las personas a mano desde el detalle.
     const excel = items.find((it) => esExcel(it.filename));
     const filas = excel ? parsePersonasSpreadsheet(excel.filename, excel.buffer) : [];
+
+    // PROTECCIÓN anti-sobrecarga: una planilla con demasiadas personas (ej. 3300) crea miles
+    // de registros y hace que el detalle se cuelgue. No se procesa automáticamente: el email
+    // queda para revisión manual (respaldo) sin crear la solicitud ni las personas.
+    if (filas.length > MAX_PERSONAS_PLANILLA) {
+      const motivo = `La planilla tiene ${filas.length} personas (máximo permitido: ${MAX_PERSONAS_PLANILLA}). No se procesó automáticamente para no sobrecargar el sistema; revisala a mano.`;
+      setEmailEstado(emailId, 'ERROR', motivo);
+      audit({ accion: 'EMAIL_PLANILLA_EXCESIVA', entidad: 'email', entidadId: emailId, detalle: { personas: filas.length, max: MAX_PERSONAS_PLANILLA } });
+      return;
+    }
+
     const avisoPersonas = !excel
       ? 'El email no trae Excel de personas: cargalas a mano en la solicitud.'
       : filas.length === 0
