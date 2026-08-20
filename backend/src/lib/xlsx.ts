@@ -200,31 +200,39 @@ export function parseSpreadsheet(filename: string, buffer: Buffer): string[][] {
 }
 
 export interface ExcelPersona {
-  cuil: string;
+  cuil?: string; // 10-11 dígitos
+  dni?: string;  // 7-8 dígitos (cuando el remitente no manda CUIL)
   nombreCompleto: string;
 }
 
+/** Clasifica un identificador por su cantidad de dígitos: CUIL (10-11) o DNI (7-8). */
+function clasificarId(raw: string): { cuil?: string; dni?: string } | null {
+  const d = (raw || '').replace(/\D/g, '');
+  if (d.length >= 10 && d.length <= 11) return { cuil: d };
+  if (d.length >= 7 && d.length <= 8) return { dni: d };
+  return null;
+}
+
 /**
- * Interpreta una planilla (ya leída como filas) con columnas "CUIL" y "Nombre completo".
- * Detecta los encabezados (en cualquier orden). Si no hay encabezados claros,
- * asume que la primera columna es CUIL y la segunda el nombre.
+ * Interpreta una planilla (ya leída como filas) con una columna de identificador
+ * (CUIL o DNI) y otra de nombre. Detecta los encabezados (en cualquier orden). Si no hay
+ * encabezados claros, asume que la primera columna es el documento y la segunda el nombre.
  */
 export function filasAPersonas(rows: string[][]): ExcelPersona[] {
   if (rows.length === 0) return [];
 
   const norm = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
-  const soloDigitos = (s: string) => (s || '').replace(/\D/g, '');
 
-  // Buscar fila de encabezado (la primera que mencione "cuil").
+  // Buscar fila de encabezado (la primera que mencione cuil/cuit/dni/documento).
   let headerIdx = -1;
-  let cuilCol = -1;
+  let idCol = -1;
   let nombreCol = -1;
   for (let i = 0; i < Math.min(rows.length, 5); i++) {
     const celdas = rows[i].map(norm);
-    const cIdx = celdas.findIndex((v) => v.includes('cuil') || v.includes('cuit'));
+    const cIdx = celdas.findIndex((v) => v.includes('cuil') || v.includes('cuit') || v.includes('dni') || v.includes('documento'));
     if (cIdx >= 0) {
       headerIdx = i;
-      cuilCol = cIdx;
+      idCol = cIdx;
       nombreCol = celdas.findIndex((v) => v.includes('nombre') || v.includes('apellido'));
       break;
     }
@@ -232,18 +240,18 @@ export function filasAPersonas(rows: string[][]): ExcelPersona[] {
 
   const out: ExcelPersona[] = [];
   if (headerIdx >= 0) {
-    if (nombreCol < 0) nombreCol = cuilCol === 0 ? 1 : 0;
+    if (nombreCol < 0) nombreCol = idCol === 0 ? 1 : 0;
     for (let i = headerIdx + 1; i < rows.length; i++) {
-      const cuil = soloDigitos(rows[i][cuilCol] ?? '');
+      const id = clasificarId(rows[i][idCol] ?? '');
       const nombreCompleto = (rows[i][nombreCol] ?? '').trim();
-      if (cuil.length >= 10) out.push({ cuil, nombreCompleto });
+      if (id) out.push({ ...id, nombreCompleto });
     }
   } else {
-    // Sin encabezado: col0 = CUIL, col1 = nombre.
+    // Sin encabezado: col0 = documento, col1 = nombre.
     for (const row of rows) {
-      const cuil = soloDigitos(row[0] ?? '');
+      const id = clasificarId(row[0] ?? '');
       const nombreCompleto = (row[1] ?? '').trim();
-      if (cuil.length >= 10) out.push({ cuil, nombreCompleto });
+      if (id) out.push({ ...id, nombreCompleto });
     }
   }
   return out;

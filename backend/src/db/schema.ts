@@ -221,6 +221,9 @@ export const solicitudes = sqliteTable(
     // y lo comparten todas las solicitudes del mismo email. NULL hasta entonces.
     nroOrden: text('nro_orden'),
     motivoRechazo: text('motivo_rechazo'),
+    // Papelera: si tiene fecha, la solicitud está "borrada" (no aparece en listados) pero
+    // se puede restaurar. NULL = activa.
+    deletedAt: text('deleted_at'),
     createdByUserId: integer('created_by_user_id').references(() => users.id),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

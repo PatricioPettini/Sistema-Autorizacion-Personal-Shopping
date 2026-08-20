@@ -6,7 +6,7 @@ import { audit } from '../../lib/audit.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { nowIso } from '../../lib/datetime.js';
 import { formatCuil, findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
-import { getPersonaDocStatus, getSolicitudDocStatus, personaAutorizableEnSolicitud } from '../documentos/service.js';
+import { getPersonaDocStatus, getSolicitudDocStatus, personaAutorizableEnSolicitud, docsSinDecidir } from '../documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona, recomputeAutorizacionesDePersona } from '../autorizaciones/service.js';
 import { recomputeSolicitudEstado, aggEstado, agruparPorEmail, asignarNroOrden } from './service.js';
 import { findOrCreateLocal } from '../locales/service.js';
@@ -73,7 +73,8 @@ export async function solicitudesRoutes(app: FastifyInstance) {
   // Las solicitudes creadas a mano (sin email) se muestran individualmente.
   app.get('/', async (req) => {
     const q = req.query as any;
-    const conds = [] as any[];
+    // Excluir las que están en la papelera (borrado lógico).
+    const conds = [isNull(schema.solicitudes.deletedAt)] as any[];
     if (q.localId) conds.push(eq(schema.solicitudes.localId, Number(q.localId)));
 
     const rows = db
@@ -263,34 +264,69 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     return { personaId: persona.id };
   });
 
-  // Eliminar una solicitud completa (admin). Borra sus vínculos y limpia las personas que
-  // quedan huérfanas (sin otra solicitud, sin ingresos). Útil para depurar cargas erróneas.
+  // Enviar una solicitud a la PAPELERA (borrado lógico, admin). No borra nada físicamente:
+  // se puede restaurar. Revoca sus autorizaciones activas (no habilita ingreso estando en papelera).
   app.delete('/:id', soloAdmin, async (req) => {
     const id = Number((req.params as any).id);
     const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
     if (!sol) throw notFound('Solicitud no encontrada.');
-    const personaIds = db.select({ personaId: schema.solicitudPersonas.personaId }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, id)).all().map((r) => r.personaId);
+    if (sol.deletedAt) return { ok: true, yaEnPapelera: true };
 
-    db.delete(schema.autorizaciones).where(eq(schema.autorizaciones.solicitudId, id)).run();
-    db.delete(schema.aiAnalyses).where(eq(schema.aiAnalyses.solicitudId, id)).run();
-    db.delete(schema.comentarios).where(eq(schema.comentarios.solicitudId, id)).run();
-    db.delete(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, id)).run();
-    db.delete(schema.solicitudes).where(eq(schema.solicitudes.id, id)).run();
+    const personas = db
+      .select({ apellido: schema.personas.apellido, nombre: schema.personas.nombre })
+      .from(schema.solicitudPersonas)
+      .innerJoin(schema.personas, eq(schema.personas.id, schema.solicitudPersonas.personaId))
+      .where(eq(schema.solicitudPersonas.solicitudId, id))
+      .all();
+    const local = db.select({ nombre: schema.locales.nombre }).from(schema.locales).where(eq(schema.locales.id, sol.localId)).get();
 
-    // Limpiar personas huérfanas (creadas por esta carga y sin otro uso).
-    for (const personaId of personaIds) {
-      const enOtra = db.select({ n: sql<number>`count(*)` }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.personaId, personaId)).get()?.n ?? 0;
-      const conIngreso = db.select({ n: sql<number>`count(*)` }).from(schema.entradas).where(eq(schema.entradas.personaId, personaId)).get()?.n ?? 0;
-      if (enOtra === 0 && conIngreso === 0) {
-        const docs = db.select({ id: schema.documentos.id }).from(schema.documentos).where(eq(schema.documentos.personaId, personaId)).all();
-        for (const d of docs) db.delete(schema.documentVersions).where(eq(schema.documentVersions.documentoId, d.id)).run();
-        db.delete(schema.documentos).where(eq(schema.documentos.personaId, personaId)).run();
-        db.delete(schema.autorizaciones).where(eq(schema.autorizaciones.personaId, personaId)).run();
-        db.delete(schema.personas).where(eq(schema.personas.id, personaId)).run();
-      }
-    }
-    audit({ userId: req.user!.id, accion: 'SOLICITUD_ELIMINADA', entidad: 'solicitud', entidadId: id, detalle: { personas: personaIds.length }, ip: req.ip });
-    return { ok: true, personasEliminadas: personaIds.length };
+    db.update(schema.solicitudes).set({ deletedAt: nowIso(), updatedAt: nowIso() }).where(eq(schema.solicitudes.id, id)).run();
+    // Revocar autorizaciones activas de esta solicitud (mientras esté en la papelera no habilita ingreso).
+    db.update(schema.autorizaciones)
+      .set({ estado: 'REVOCADA', motivoRevocacion: 'Solicitud enviada a la papelera.', revocadaPorUserId: req.user!.id, fechaRevocacion: nowIso() })
+      .where(and(eq(schema.autorizaciones.solicitudId, id), eq(schema.autorizaciones.estado, 'AUTORIZADA')))
+      .run();
+
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_ELIMINADA', entidad: 'solicitud', entidadId: id,
+      detalle: { local: local?.nombre, nroOrden: sol.nroOrden, personas: personas.map((p) => `${p.apellido}, ${p.nombre}`) }, ip: req.ip });
+    return { ok: true, personasEliminadas: 0, papelera: true };
+  });
+
+  // Papelera: solicitudes borradas (recuperables).
+  app.get('/papelera', soloAdmin, async () => {
+    return db
+      .select({
+        id: schema.solicitudes.id,
+        nroOrden: schema.solicitudes.nroOrden,
+        estado: schema.solicitudes.estado,
+        deletedAt: schema.solicitudes.deletedAt,
+        local: schema.locales.nombre,
+        asunto: schema.emailMessages.asunto,
+        personasCount: sql<number>`count(${schema.solicitudPersonas.id})`,
+        personasLabel: sql<string>`group_concat(${schema.personas.apellido} || ', ' || ${schema.personas.nombre}, ' · ')`,
+      })
+      .from(schema.solicitudes)
+      .innerJoin(schema.locales, eq(schema.solicitudes.localId, schema.locales.id))
+      .leftJoin(schema.emailMessages, eq(schema.solicitudes.emailMessageId, schema.emailMessages.id))
+      .leftJoin(schema.solicitudPersonas, eq(schema.solicitudPersonas.solicitudId, schema.solicitudes.id))
+      .leftJoin(schema.personas, eq(schema.personas.id, schema.solicitudPersonas.personaId))
+      .where(sql`${schema.solicitudes.deletedAt} IS NOT NULL`)
+      .groupBy(schema.solicitudes.id)
+      .orderBy(desc(schema.solicitudes.deletedAt))
+      .all();
+  });
+
+  // Restaurar una solicitud de la papelera.
+  app.post('/:id/restaurar', soloAdmin, async (req) => {
+    const id = Number((req.params as any).id);
+    const sol = db.select().from(schema.solicitudes).where(eq(schema.solicitudes.id, id)).get();
+    if (!sol) throw notFound('Solicitud no encontrada.');
+    db.update(schema.solicitudes).set({ deletedAt: null, updatedAt: nowIso() }).where(eq(schema.solicitudes.id, id)).run();
+    const sps = db.select({ personaId: schema.solicitudPersonas.personaId }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, id)).all();
+    for (const sp of sps) recomputeAutorizacionesDePersona(sp.personaId, req.user!.id);
+    recomputeSolicitudEstado(id);
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_RESTAURADA', entidad: 'solicitud', entidadId: id, ip: req.ip });
+    return { ok: true };
   });
 
   // Quitar una persona de la solicitud (no borra a la persona ni su documentación).
@@ -392,6 +428,14 @@ export async function solicitudesRoutes(app: FastifyInstance) {
       const quienes = sinTipo.slice(0, 5).map((p) => `${p.apellido}, ${p.nombre}`).join('; ');
       const extra = sinTipo.length > 5 ? ` y ${sinTipo.length - 5} más` : '';
       throw badRequest(`Falta definir si es Empresa o Monotributista en: ${quienes}${extra}. Asigná el tipo de contratista antes de terminar la revisión.`);
+    }
+
+    // No se puede terminar si quedó algún documento sin decidir (ni aprobado ni marcado como falta).
+    const hermanasIds = (sol.emailMessageId != null
+      ? db.select({ id: schema.solicitudes.id }).from(schema.solicitudes).where(eq(schema.solicitudes.emailMessageId, sol.emailMessageId)).all().map((r) => r.id)
+      : [id]);
+    if (hermanasIds.some((sid) => docsSinDecidir(sid))) {
+      throw badRequest('La revisión está incompleta: quedan documentos sin decidir. Aprobá o marcá como falta cada documento antes de terminar y enviar el email.');
     }
 
     // El número se asigna al cerrar la revisión, aunque el email no se pueda enviar:

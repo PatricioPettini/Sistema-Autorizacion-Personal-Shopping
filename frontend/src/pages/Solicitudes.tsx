@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useFetch } from '../hooks';
-import { Badge, Spinner, Modal, useToast } from '../ui';
+import { Badge, Spinner, Modal, useToast, useConfirm } from '../ui';
 import { api, fmtFecha, tipoLabel, hoy } from '../api';
 import { useAuth } from '../auth';
 
@@ -39,6 +39,7 @@ export default function Solicitudes() {
   const nav = useNavigate();
   const isAdmin = useAuth().user?.rol === 'ADMIN';
   const { notify } = useToast();
+  const confirm = useConfirm();
   const [nueva, setNueva] = useState(false);
   const [form, setForm] = useState(VACIO);
   const [pegar, setPegar] = useState(false);
@@ -48,7 +49,12 @@ export default function Solicitudes() {
 
   const eliminar = async (r: Row) => {
     const n = r.personasCount;
-    if (!confirm(`¿Eliminar la solicitud de "${r.local}"${n ? ` (${n} ${n === 1 ? 'persona' : 'personas'})` : ''}?\n\nSe borra la solicitud y las personas que no tengan otra solicitud ni ingresos registrados. Esta acción no se puede deshacer.`)) return;
+    if (!await confirm({
+      title: 'Eliminar solicitud',
+      danger: true,
+      confirmLabel: 'Eliminar',
+      message: `¿Eliminar la solicitud de "${r.local}"${n ? ` (${n} ${n === 1 ? 'persona' : 'personas'})` : ''}?\n\nSe borra la solicitud y las personas que no tengan otra solicitud ni ingresos registrados. Esta acción no se puede deshacer.`,
+    })) return;
     setEliminando(r.id);
     try {
       const res = await api.del<{ ok: boolean; personasEliminadas: number }>(`/solicitudes/${r.id}`);

@@ -7,7 +7,7 @@ import { audit } from '../../lib/audit.js';
 import { nowIso } from '../../lib/datetime.js';
 import { isZip } from '../../lib/files.js';
 import { extractZip } from './zip.js';
-import { findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
+import { findOrCreatePersona, normalizeCuil, normalizeDni, splitNombreCompleto } from '../personas/service.js';
 import { getPlaceholderLocalId } from '../../db/migrate.js';
 import { parsePersonasSpreadsheet } from '../../lib/xlsx.js';
 import { findOrCreateLocal } from '../locales/service.js';
@@ -223,10 +223,11 @@ Por favor divida el pedido en solicitudes de hasta ${MAX_PERSONAS_PLANILLA} pers
     // Alta/asociación de cada persona del Excel.
     const personaIds: number[] = [];
     for (const fila of filas) {
-      const cuil = normalizeCuil(fila.cuil);
-      if (cuil.length < 10) continue;
+      const cuil = normalizeCuil(fila.cuil ?? '');
+      const dni = normalizeDni(fila.dni ?? '');
+      if (cuil.length < 10 && dni.length < 7) continue;
       const nc = splitNombreCompleto(fila.nombreCompleto);
-      const { persona, created } = findOrCreatePersona({ cuil, nombre: nc.nombre, apellido: nc.apellido });
+      const { persona, created } = findOrCreatePersona({ cuil, dni, nombre: nc.nombre, apellido: nc.apellido });
       if (created) audit({ accion: 'PERSONA_CREADA', entidad: 'persona', entidadId: persona.id, detalle: { origen: 'email', emailId } });
       // El asunto declara Empresa/Monotributista => se asigna la categoría (para exigir sus documentos).
       if (tipo && persona.categoria !== tipo) {

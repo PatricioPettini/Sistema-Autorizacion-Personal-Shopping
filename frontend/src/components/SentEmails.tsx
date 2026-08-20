@@ -5,7 +5,7 @@ import { Spinner } from '../ui';
 
 interface Sent {
   id: number; fecha: string; destinatario: string | null; asunto: string | null;
-  cuerpo: string | null; tipo: string | null; ok: boolean; error: string | null;
+  cuerpo: string | null; tipo: string | null; ok: boolean; error: string | null; nroOrden?: string | null;
 }
 
 const TIPO_LABEL: Record<string, string> = {
@@ -13,14 +13,18 @@ const TIPO_LABEL: Record<string, string> = {
   AUTORIZACION: 'Autorización', PLANILLA_EXCESIVA: 'Aviso: planilla excesiva',
 };
 
-/** Lista los correos que el sistema envió (para una solicitud, o todos si no se pasa solicitudId). */
-export function SentEmails({ solicitudId }: { solicitudId?: number }) {
-  const qs = solicitudId ? `?solicitudId=${solicitudId}` : '';
-  const { data, loading } = useFetch<Sent[]>(`/emails/enviados${qs}`, [solicitudId]);
+/** Lista los correos que el sistema envió (por solicitud, o todos con filtros). */
+export function SentEmails({ solicitudId, q, tipo, showOrden }: { solicitudId?: number; q?: string; tipo?: string; showOrden?: boolean }) {
+  const params = new URLSearchParams();
+  if (solicitudId) params.set('solicitudId', String(solicitudId));
+  if (q?.trim()) params.set('q', q.trim());
+  if (tipo) params.set('tipo', tipo);
+  const qs = params.toString() ? `?${params}` : '';
+  const { data, loading } = useFetch<Sent[]>(`/emails/enviados${qs}`, [solicitudId, q, tipo]);
   const [abierto, setAbierto] = useState<number | null>(null);
 
   if (loading) return <Spinner />;
-  if (!data || data.length === 0) return <p className="muted">Todavía no se envió ningún correo desde el sistema.</p>;
+  if (!data || data.length === 0) return <p className="muted">No hay correos que coincidan.</p>;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {data.map((s) => (
@@ -29,6 +33,8 @@ export function SentEmails({ solicitudId }: { solicitudId?: number }) {
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 12.5 }}>
                 <span className="chip">{s.tipo ? TIPO_LABEL[s.tipo] ?? s.tipo : 'Correo'}</span>
+                {' '}
+                {showOrden && s.nroOrden && <span className="chip" title="Número de orden">{s.nroOrden}</span>}
                 {' '}
                 {s.ok ? <span className="badge green">Enviado</span> : <span className="badge red">No enviado</span>}
               </div>

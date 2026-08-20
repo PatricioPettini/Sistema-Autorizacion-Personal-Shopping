@@ -63,6 +63,31 @@ export function Modal({ title, children, onClose, footer, wide, full }: { title:
   );
 }
 
+// ---------- Confirm (modal, reemplaza window.confirm) ----------
+interface ConfirmOpts { title?: string; message: ReactNode; confirmLabel?: string; cancelLabel?: string; danger?: boolean; }
+const ConfirmCtx = createContext<(opts: ConfirmOpts) => Promise<boolean>>(async () => false);
+export const useConfirm = () => useContext(ConfirmCtx);
+
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<{ opts: ConfirmOpts; resolve: (v: boolean) => void } | null>(null);
+  const confirm = useCallback((opts: ConfirmOpts) => new Promise<boolean>((resolve) => setState({ opts, resolve })), []);
+  const close = (v: boolean) => { setState((s) => { s?.resolve(v); return null; }); };
+  return (
+    <ConfirmCtx.Provider value={confirm}>
+      {children}
+      {state && (
+        <Modal title={state.opts.title ?? 'Confirmar'} onClose={() => close(false)}
+          footer={<>
+            <button className="btn" onClick={() => close(false)}>{state.opts.cancelLabel ?? 'Cancelar'}</button>
+            <button className={`btn ${state.opts.danger ? 'danger' : 'primary'}`} onClick={() => close(true)}>{state.opts.confirmLabel ?? 'Confirmar'}</button>
+          </>}>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{state.opts.message}</div>
+        </Modal>
+      )}
+    </ConfirmCtx.Provider>
+  );
+}
+
 // ---------- Toasts ----------
 interface Toast { id: number; msg: string; type: 'info' | 'success' | 'error'; }
 const ToastCtx = createContext<{ notify: (msg: string, type?: Toast['type']) => void }>({ notify: () => {} });

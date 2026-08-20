@@ -40,20 +40,37 @@ export function findPersonaByCuil(cuil: string) {
 }
 
 export interface PersonaInput {
-  cuil: string;
+  cuil?: string;
+  dni?: string;
   nombre: string;
   apellido: string;
 }
 
-/** Busca por CUIL; si no existe la crea. Nunca duplica por CUIL. */
+/**
+ * Busca por CUIL y, si no, por DNI; si no existe la crea. Nunca duplica.
+ * Acepta identificar por CUIL (11 díg.) o por DNI (7-8 díg.) cuando el remitente
+ * no manda CUIL. La columna `dni` es NOT NULL UNIQUE: guardamos el DNI real, o el
+ * CUIL si es lo único que hay.
+ */
 export function findOrCreatePersona(input: PersonaInput): { persona: typeof schema.personas.$inferSelect; created: boolean } {
-  const norm = normalizeCuil(input.cuil);
-  const existing = findPersonaByCuil(norm);
-  if (existing) return { persona: existing, created: false };
+  const cuil = normalizeCuil(input.cuil ?? '');
+  const dni = normalizeDni(input.dni ?? '');
+
+  let existing = cuil ? findPersonaByCuil(cuil) : null;
+  if (!existing && dni) existing = db.select().from(schema.personas).where(eq(schema.personas.dni, dni)).get() ?? null;
+  if (existing) {
+    // Completar el CUIL si antes se cargó solo por DNI y ahora llega el CUIL.
+    if (cuil && !existing.cuil) {
+      db.update(schema.personas).set({ cuil }).where(eq(schema.personas.id, existing.id)).run();
+      existing = { ...existing, cuil };
+    }
+    return { persona: existing, created: false };
+  }
+
+  const dniFinal = dni || cuil; // dni es NOT NULL
   const persona = db
     .insert(schema.personas)
-    // dni se conserva por compatibilidad (NOT NULL UNIQUE): guardamos el CUIL también ahí.
-    .values({ cuil: norm, dni: norm, nombre: input.nombre.trim(), apellido: input.apellido.trim() })
+    .values({ cuil: cuil || null, dni: dniFinal, nombre: input.nombre.trim(), apellido: input.apellido.trim() })
     .returning()
     .get();
   return { persona, created: true };

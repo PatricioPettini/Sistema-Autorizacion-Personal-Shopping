@@ -141,9 +141,13 @@ export async function emailsRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // Registro de correos ENVIADOS por el sistema (opcionalmente filtrado por solicitud).
+  // Registro de correos ENVIADOS por el sistema. Filtros: por solicitud, por texto libre
+  // (asunto/destinatario/N° de orden) y por tipo. Incluye el N° de orden de la solicitud.
   app.get('/enviados', async (req) => {
-    const solicitudId = Number((req.query as any)?.solicitudId) || null;
+    const q = req.query as any;
+    const solicitudId = Number(q?.solicitudId) || null;
+    const term = String(q?.q ?? '').trim().toLowerCase();
+    const tipo = String(q?.tipo ?? '').trim();
     const base = db.select({
       id: schema.sentEmails.id,
       fecha: schema.sentEmails.createdAt,
@@ -154,10 +158,16 @@ export async function emailsRoutes(app: FastifyInstance) {
       ok: schema.sentEmails.ok,
       error: schema.sentEmails.error,
       solicitudId: schema.sentEmails.solicitudId,
-    }).from(schema.sentEmails);
-    const rows = solicitudId
+      nroOrden: schema.solicitudes.nroOrden,
+    }).from(schema.sentEmails).leftJoin(schema.solicitudes, eq(schema.sentEmails.solicitudId, schema.solicitudes.id));
+    let rows = solicitudId
       ? base.where(eq(schema.sentEmails.solicitudId, solicitudId)).orderBy(desc(schema.sentEmails.createdAt)).all()
-      : base.orderBy(desc(schema.sentEmails.createdAt)).limit(200).all();
+      : base.orderBy(desc(schema.sentEmails.createdAt)).limit(500).all();
+    if (tipo) rows = rows.filter((r) => r.tipo === tipo);
+    if (term) rows = rows.filter((r) =>
+      (r.nroOrden ?? '').toLowerCase().includes(term) ||
+      (r.asunto ?? '').toLowerCase().includes(term) ||
+      (r.destinatario ?? '').toLowerCase().includes(term));
     return rows;
   });
 }

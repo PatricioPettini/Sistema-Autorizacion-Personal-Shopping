@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useFetch } from '../hooks';
 import { api, fmtFecha, fmtSoloFecha, tipoLabel } from '../api';
-import { Badge, Spinner, Modal, useToast } from '../ui';
+import { Badge, Spinner, Modal, useToast, useConfirm } from '../ui';
 import { DocList } from '../components/DocList';
 import { EmailInline } from '../components/EmailInline';
 import { SentEmails } from '../components/SentEmails';
@@ -41,6 +41,7 @@ export default function SolicitudDetalle() {
   const { data: tiposDoc } = useFetch<any[]>('/tipos-documento', []);
   const isAdmin = useAuth().user?.rol === 'ADMIN';
   const { notify } = useToast();
+  const confirm = useConfirm();
   const nav = useNavigate();
 
   // Catálogo de requisitos EXTRA que se pueden agregar durante la revisión.
@@ -62,6 +63,7 @@ export default function SolicitudDetalle() {
   const [reqPersona, setReqPersona] = useState<{ personaId: number; nombre: string } | null>(null);
   const [reqSel, setReqSel] = useState('');
   const [reqNombre, setReqNombre] = useState('');
+  const [verEmail, setVerEmail] = useState(false);
 
   // Sincronizar el campo de vencimiento con lo que trae la solicitud.
   useEffect(() => { if (data?.solicitud) setVenc(data.solicitud.fechaVencimiento ?? ''); }, [data?.solicitud?.fechaVencimiento]);
@@ -76,6 +78,12 @@ export default function SolicitudDetalle() {
   const personasSinTipo = (personas as any[]).filter((p: any) => !p.docStatus?.categoria);
   const faltaTipo = personasSinTipo.length > 0;
   const fechaVenc = solicitud.fechaVencimiento as string | null;
+
+  // No se puede terminar/enviar si quedó algún documento SIN decidir (ni aprobado ni marcado
+  // como falta). Se ignoran personas ya rechazadas/reemplazadas.
+  const solDocPend = (solicitudDocs?.items ?? []).some((it: any) => it.verificacion === 'PENDIENTE');
+  const perDocPend = (personas as any[]).some((p: any) => !['RECHAZADA', 'REEMPLAZADA'].includes(p.estado) && (p.docStatus?.items ?? []).some((it: any) => it.verificacion === 'PENDIENTE'));
+  const revisionIncompleta = solDocPend || perDocPend;
 
   const run = async (fn: () => Promise<any>, ok: string) => {
     setBusy(true);
@@ -125,8 +133,8 @@ export default function SolicitudDetalle() {
     await run(() => api.post('/documentos/requisitos', body), 'Requisito agregado.');
     setReqPersona(null); setReqSel(''); setReqNombre('');
   };
-  const quitarRequisito = (personaId: number, tipoDocumentoId: number, nombre: string) => {
-    if (!confirm(`¿Quitar el requisito "${nombre}"?`)) return;
+  const quitarRequisito = async (personaId: number, tipoDocumentoId: number, nombre: string) => {
+    if (!await confirm({ title: 'Quitar requisito', message: `¿Quitar el requisito "${nombre}"?`, confirmLabel: 'Quitar', danger: true })) return;
     run(() => api.del(`/documentos/requisitos/${personaId}/${tipoDocumentoId}`), 'Requisito quitado.');
   };
   const addComentario = () => { if (!nuevoComentario.trim()) return; run(() => api.post(`/solicitudes/${solicitud.id}/comentarios`, { contenido: nuevoComentario }), 'Comentario agregado.').then(() => setNuevoComentario('')); };
@@ -135,8 +143,8 @@ export default function SolicitudDetalle() {
     await run(() => api.post(`/solicitudes/${solicitud.id}/personas`, { ...nuevaPersona, categoria: nuevaPersona.categoria || undefined }), 'Persona agregada.');
     setAgregar(false); setNuevaPersona({ cuil: '', nombre: '', apellido: '', categoria: '' });
   };
-  const quitarPersona = (solicitudId: number, personaId: number, nombre: string) => {
-    if (!confirm(`¿Quitar a ${nombre} de esta solicitud? (No se borra la persona ni su documentación.)`)) return;
+  const quitarPersona = async (solicitudId: number, personaId: number, nombre: string) => {
+    if (!await confirm({ title: 'Quitar persona', message: `¿Quitar a ${nombre} de esta solicitud? (No se borra la persona ni su documentación.)`, confirmLabel: 'Quitar', danger: true })) return;
     run(() => api.del(`/solicitudes/${solicitudId}/personas/${personaId}`), 'Persona quitada.');
   };
   const guardarEdit = async () => {
@@ -249,7 +257,21 @@ export default function SolicitudDetalle() {
       )}
 
       {email?.aviso && personas.length === 0 && (
-        <div className="alert warn">📄 {email.aviso}{isAdmin && ' Usá "+ Agregar persona" (los adjuntos del email se ven más abajo).'}</div>
+        <div className="alert warn">📄 {email.aviso}{isAdmin && ' Abajo podés ver el email y "+ Agregar persona".'}</div>
+      )}
+
+      {/* Email recibido: se puede ver SIN entrar a revisar. Abierto solo cuando no hay personas
+          (para leer el cuerpo/adjuntos y cargar la gente a mano). */}
+      {solicitud.emailMessageId && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-head" style={{ cursor: 'pointer' }} onClick={() => setVerEmail((v) => !v)}>
+            <span>📧 Email recibido {email?.asunto && <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>— {email.asunto}</span>}</span>
+            <button className="btn ghost sm">{(verEmail || personas.length === 0) ? 'Ocultar' : 'Ver email'}</button>
+          </div>
+          {(verEmail || personas.length === 0) && (
+            <div className="card-body"><EmailInline emailId={solicitud.emailMessageId} /></div>
+          )}
+        </div>
       )}
 
       {/* Documentación de alcance SOLICITUD (una sola para todo el grupo). */}
@@ -320,7 +342,8 @@ export default function SolicitudDetalle() {
           footer={<>
             <button className="btn" onClick={() => setRevisando(false)}>Cerrar</button>
             {faltaTipo && <span className="muted" style={{ fontSize: 12.5, alignSelf: 'center' }}>⚠ Definí si es empresa o monotributista para poder terminar.</span>}
-            <button className="btn primary" onClick={() => setConfirmarTerminar(true)} disabled={busy || faltaTipo} title={faltaTipo ? 'Falta definir el tipo de contratista (empresa/monotributista).' : undefined}>✅ Terminar revisión y avisar al remitente</button>
+            {!faltaTipo && revisionIncompleta && <span className="muted" style={{ fontSize: 12.5, alignSelf: 'center' }}>⚠ Aprobá o marcá como falta cada documento antes de enviar.</span>}
+            <button className="btn primary" onClick={() => setConfirmarTerminar(true)} disabled={busy || faltaTipo || revisionIncompleta} title={faltaTipo ? 'Falta definir el tipo de contratista.' : revisionIncompleta ? 'Quedan documentos sin decidir (aprobar o marcar como falta).' : undefined}>✅ Terminar revisión y avisar al remitente</button>
           </>}>
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {/* Barra de vigencia (fecha única de la solicitud) */}
@@ -334,7 +357,7 @@ export default function SolicitudDetalle() {
             </div>
             {/* 2 columnas */}
             <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-              <div style={{ flex: '1 1 55%', overflow: 'auto', padding: 16, borderRight: '1px solid var(--border)' }}>
+              <div style={{ flex: '1 1 30%', minWidth: 300, overflow: 'auto', padding: 16, borderRight: '1px solid var(--border)' }}>
                 <div className="muted" style={{ marginBottom: 10 }}>Aprobá cada requisito contra los PDF de la derecha. Al completar todos, la persona queda autorizada sola.</div>
                 <div className="card" style={{ marginBottom: 14 }}>
                   <div className="card-head" style={{ fontSize: 13 }}>📎 Documentación de la solicitud <span className="muted" style={{ fontWeight: 400 }}>(una para todo el grupo)</span></div>
@@ -342,7 +365,7 @@ export default function SolicitudDetalle() {
                 </div>
                 {personas.map((p: any) => <PersonaCard key={p.spId} p={p} />)}
               </div>
-              <div style={{ flex: '1 1 45%', overflow: 'auto', padding: 16 }}>
+              <div style={{ flex: '1 1 70%', minWidth: 0, overflow: 'auto', padding: 16 }}>
                 <div style={{ fontWeight: 650, marginBottom: 10 }}>📄 Documentación (PDF)</div>
                 {solicitud.emailMessageId
                   ? <EmailInline emailId={solicitud.emailMessageId} wide />

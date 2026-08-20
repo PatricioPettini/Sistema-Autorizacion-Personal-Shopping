@@ -2,7 +2,7 @@ import { useState, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useFetch } from '../hooks';
 import { api, fmtFecha } from '../api';
-import { Spinner, useToast } from '../ui';
+import { Spinner, useToast, useConfirm } from '../ui';
 import { EmailInline } from '../components/EmailInline';
 
 interface SolRef { id: number; nroOrden: string | null; local: string; }
@@ -18,11 +18,12 @@ export default function Respaldo() {
   const { data, loading, reload } = useFetch<Row[]>('/emails/respaldo', []);
   const nav = useNavigate();
   const { notify } = useToast();
+  const confirm = useConfirm();
   const [abierto, setAbierto] = useState<number | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
   const procesar = async (r: Row) => {
-    if (!confirm('Procesar igual este correo y crear la solicitud automáticamente? Usalo solo si estás seguro de que es un pedido nuevo (no una respuesta o corrección).')) return;
+    if (!await confirm({ title: 'Procesar igual', message: 'Procesar igual este correo y crear la solicitud automáticamente? Usalo solo si estás seguro de que es un pedido nuevo (no una respuesta o corrección).', confirmLabel: 'Procesar igual' })) return;
     setBusy(r.id);
     try {
       const res = await api.post<{ estado: string; motivo: string | null }>(`/emails/${r.id}/procesar`);
@@ -31,7 +32,7 @@ export default function Respaldo() {
     } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }
   };
   const descartar = async (r: Row) => {
-    if (!confirm('Descartar este correo del respaldo? Se marca como revisado y sale de la lista (no se borra).')) return;
+    if (!await confirm({ title: 'Descartar correo', message: 'Descartar este correo del respaldo? Se marca como revisado y sale de la lista (no se borra).', confirmLabel: 'Descartar' })) return;
     setBusy(r.id);
     try { await api.post(`/emails/${r.id}/descartar`); notify('Correo descartado del respaldo.', 'success'); reload(); }
     catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }

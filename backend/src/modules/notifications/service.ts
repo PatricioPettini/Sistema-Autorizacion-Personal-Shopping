@@ -2,7 +2,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
 import { sendMail } from '../email/mailer.js';
 import { formatCuil } from '../personas/service.js';
-import { personaAutorizableEnSolicitud } from '../documentos/service.js';
+import { getPersonaDocStatus, getSolicitudDocStatus } from '../documentos/service.js';
 import { audit } from '../../lib/audit.js';
 import { todayLocal } from '../../lib/datetime.js';
 
@@ -116,24 +116,38 @@ export async function notifyResultadoRevision(solicitudId: number): Promise<{ en
     .orderBy(schema.personas.apellido)
     .all();
 
+  // Documentación GENERAL (una para todo el local) que falta: se lista UNA vez, no por persona.
+  const generalFaltante = getSolicitudDocStatus(solicitudId).faltantes;
+
+  let hayPendientes = false;
   const lineas = sps.map((p) => {
     const nom = `${p.apellido}, ${p.nombre} (CUIL ${formatCuil(p.cuil ?? '')})`;
     if (p.estado === 'AUTORIZADA') return `✓ ${nom}\n   AUTORIZADO — ${venc ? `puede ingresar hasta el ${fmtFechaCorta(venc)}` : 'puede ingresar (sin fecha de vencimiento definida)'}.`;
     // El motivo lo escribe una persona y suele venir con punto final: no duplicarlo.
     const motivo = p.motivoRechazo?.trim().replace(/\.+$/, '');
     if (p.estado === 'RECHAZADA') return `✗ ${nom}\n   RECHAZADO${motivo ? ` — ${motivo}` : ''}.`;
-    const faltantes = personaAutorizableEnSolicitud(solicitudId, p.personaId).faltantes;
-    return `• ${nom}\n   PENDIENTE — falta: ${faltantes.length ? faltantes.join(', ') : 'documentación por revisar'}.`;
+    hayPendientes = true;
+    // Solo la documentación INDIVIDUAL de la persona (la general va aparte, para no repetirla).
+    const personales = getPersonaDocStatus(p.personaId).faltantes;
+    const falta = personales.length
+      ? personales.join(', ')
+      : (generalFaltante.length ? 'documentación general del local (ver arriba)' : 'documentación por revisar');
+    return `• ${nom}\n   PENDIENTE — falta: ${falta}.`;
   });
+
+  const bloqueGeneral = generalFaltante.length
+    ? `\nDocumentación general del local pendiente (una sola para toda la solicitud): ${generalFaltante.join(', ')}.\n`
+    : '';
+  const notaPendientes = hayPendientes
+    ? '\n\nPor las personas que figuran como PENDIENTE, enviar la documentación faltante para completar la autorización.'
+    : '';
 
   const texto = `Resultado de la revisión de la documentación enviada.
 
 ${nroOrden ? `Número de orden: ${nroOrden}\n` : ''}Local: ${local?.nombre ?? '-'}
 Fecha: ${fmtFechaCorta(todayLocal())}
-
-${lineas.join('\n\n')}
-
-Por las personas que figuran como PENDIENTE, enviar la documentación faltante para completar la autorización.${nroOrden ? `\n\nCitar el número de orden ${nroOrden} en cualquier consulta sobre esta solicitud.` : ''}`;
+${bloqueGeneral}
+${lineas.join('\n\n')}${notaPendientes}${nroOrden ? `\n\nCitar el número de orden ${nroOrden} en cualquier consulta sobre esta solicitud.` : ''}`;
 
   const asuntoLocal = local?.nombre ?? 'Ingreso de personal';
   const subject = nroOrden ? `Orden ${nroOrden} — Resultado de la revisión — ${asuntoLocal}` : `Resultado de la revisión — ${asuntoLocal}`;

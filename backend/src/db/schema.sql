@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS solicitudes (
   -- revision y lo comparten todas las solicitudes del mismo email. NULL hasta entonces.
   nro_orden TEXT,
   motivo_rechazo TEXT,
+  deleted_at TEXT, -- papelera (borrado logico): NULL = activa
   created_by_user_id INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

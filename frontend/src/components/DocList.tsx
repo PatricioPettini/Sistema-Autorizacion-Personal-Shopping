@@ -71,15 +71,14 @@ export function DocList({ docStatus, personaId, onChanged, onQuitarRequisito }: 
                 {it.notaVerificacion && <div className="muted" style={{ fontSize: 12.5 }}>Nota: {it.notaVerificacion}</div>}
 
                 {/* Acciones de aprobación manual (el "check" de Seguridad) */}
-                {personaId && (
+                {personaId && isAdmin && (
                   <div className="btn-row" style={{ marginTop: 8, alignItems: 'center' }}>
-                    {isAdmin && it.verificacion !== 'VERIFICADO' && (
-                      <button className="btn success sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'VERIFICADO')}>✓ Aprobar</button>
-                    )}
-                    {isAdmin && it.verificacion !== 'RECHAZADO' && (
-                      <button className="btn danger sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'RECHAZADO')}>✕ Falta / Rechazar</button>
-                    )}
-                    {isAdmin && it.verificacion !== 'PENDIENTE' && (
+                    {it.verificacion === 'PENDIENTE' ? (
+                      <>
+                        <button className="btn success sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'VERIFICADO')}>✓ Aprobar</button>
+                        <button className="btn danger sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'RECHAZADO')}>✕ Falta / Rechazar</button>
+                      </>
+                    ) : (
                       <button className="btn ghost sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'PENDIENTE')}>Deshacer</button>
                     )}
                   </div>

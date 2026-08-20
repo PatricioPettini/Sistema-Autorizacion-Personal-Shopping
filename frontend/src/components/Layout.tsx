@@ -52,6 +52,8 @@ export default function Layout({ children }: { children: ReactNode }) {
             <>
               <div className="nav-group">Administración</div>
               <Item to="/respaldo" ico="🛟" label="Respaldo" pill={respaldo || undefined} />
+              <Item to="/correos" ico="📤" label="Correos enviados" />
+              <Item to="/papelera" ico="🗑️" label="Papelera" />
               <Item to="/locales" ico="🏬" label="Locales" />
               <Item to="/usuarios" ico="👥" label="Usuarios" />
               <Item to="/tipos-documento" ico="🗂️" label="Tipos de documento" />

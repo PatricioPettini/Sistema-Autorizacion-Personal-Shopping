@@ -46,16 +46,17 @@ export function parsePersonasFromBody(html?: string, text?: string): ExcelPerson
     if (personas.length > 0) return personas;
   }
 
-  // 2) Texto plano: una persona por línea con un CUIL adentro.
+  // 2) Texto plano: una persona por línea con un CUIL (11) o DNI (7-8) adentro.
   const out: ExcelPersona[] = [];
   const cuerpo = text ?? (html ? stripHtml(html.replace(/<\/(tr|p|div|li)>/gi, '\n')) : '');
   for (const linea of cuerpo.split(/\r?\n/)) {
     const tokens = linea.split(/[\t;,|]+|\s+/).map((x) => x.trim()).filter(Boolean);
-    const iCuil = tokens.findIndex((x) => x.replace(/\D/g, '').length >= 10 && x.replace(/\D/g, '').length <= 11);
-    if (iCuil < 0) continue;
-    const cuil = tokens[iCuil].replace(/\D/g, '');
-    const nombreCompleto = tokens.filter((_, k) => k !== iCuil).join(' ').trim();
-    if (cuil.length >= 10) out.push({ cuil, nombreCompleto });
+    const iId = tokens.findIndex((x) => { const n = x.replace(/\D/g, '').length; return (n >= 10 && n <= 11) || (n >= 7 && n <= 8); });
+    if (iId < 0) continue;
+    const dig = tokens[iId].replace(/\D/g, '');
+    const nombreCompleto = tokens.filter((_, k) => k !== iId).join(' ').trim();
+    if (dig.length >= 10) out.push({ cuil: dig, nombreCompleto });
+    else out.push({ dni: dig, nombreCompleto });
   }
   return out;
 }

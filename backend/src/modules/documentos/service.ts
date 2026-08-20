@@ -273,3 +273,23 @@ export function personaAutorizableEnSolicitud(solicitudId: number, personaId: nu
   const verificados = p.verificadosObligatorios + s.verificados;
   return { ok: total > 0 && verificados === total, faltantes: [...p.faltantes, ...s.faltantes] };
 }
+
+/**
+ * ¿Quedó algún documento SIN decidir (ni aprobado ni marcado como falta) en la solicitud?
+ * Considera la documentación de alcance SOLICITUD y la de cada persona (salvo las ya
+ * rechazadas/reemplazadas). Se usa para no dejar terminar/enviar una revisión a medias.
+ */
+export function docsSinDecidir(solicitudId: number): boolean {
+  const sol = getSolicitudDocStatus(solicitudId);
+  if (sol.items.some((i) => i.verificacion === 'PENDIENTE')) return true;
+  const sps = db
+    .select({ personaId: schema.solicitudPersonas.personaId, estado: schema.solicitudPersonas.estado })
+    .from(schema.solicitudPersonas)
+    .where(eq(schema.solicitudPersonas.solicitudId, solicitudId))
+    .all();
+  for (const sp of sps) {
+    if (sp.estado === 'RECHAZADA' || sp.estado === 'REEMPLAZADA') continue;
+    if (getPersonaDocStatus(sp.personaId).items.some((i) => i.verificacion === 'PENDIENTE')) return true;
+  }
+  return false;
+}

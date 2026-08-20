@@ -55,6 +55,7 @@ function migrateColumns(): void {
   ensureColumn('documentos', 'fecha_vencimiento', 'TEXT');
   ensureColumn('solicitudes', 'fecha_vencimiento', 'TEXT'); // vencimiento único de la solicitud
   ensureColumn('solicitudes', 'nro_orden', 'TEXT'); // número de orden de la revisión
+  ensureColumn('solicitudes', 'deleted_at', 'TEXT'); // papelera (borrado lógico)
   ensureIndex('CREATE INDEX IF NOT EXISTS sol_nro_orden_idx ON solicitudes(nro_orden)');
   ensureColumn('email_messages', 'reply_solicitud_id', 'INTEGER'); // respuesta -> solicitud original (respaldo)
 }
@@ -82,12 +83,13 @@ function migrateSolicitudPersonaIdOpcional(): void {
       fecha_vencimiento TEXT,
       nro_orden TEXT,
       motivo_rechazo TEXT,
+      deleted_at TEXT,
       created_by_user_id INTEGER REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
-    INSERT INTO solicitudes__new (id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, nro_orden, motivo_rechazo, created_by_user_id, created_at, updated_at)
-      SELECT id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, nro_orden, motivo_rechazo, created_by_user_id, created_at, updated_at FROM solicitudes;
+    INSERT INTO solicitudes__new (id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, nro_orden, motivo_rechazo, deleted_at, created_by_user_id, created_at, updated_at)
+      SELECT id, persona_id, local_id, email_message_id, estado, fecha_vencimiento, nro_orden, motivo_rechazo, deleted_at, created_by_user_id, created_at, updated_at FROM solicitudes;
     DROP TABLE solicitudes;
     ALTER TABLE solicitudes__new RENAME TO solicitudes;
     CREATE INDEX IF NOT EXISTS sol_estado_idx ON solicitudes(estado);
@@ -176,6 +178,19 @@ export function getPlaceholderLocalId(): number {
   return (rawDb.prepare('SELECT id FROM locales WHERE nombre = ?').get(LOCAL_SIN_ASIGNAR) as { id: number }).id;
 }
 
+/**
+ * Un email en PROCESSING al arrancar quedó a medio procesar (el proceso murió, ej. un mail
+ * muy grande que agotó la memoria). No hay forma de saber si terminó, así que lo pasamos a
+ * respaldo para revisarlo/reprocesarlo a mano y que no quede "colgado" para siempre.
+ */
+function recoverStuckProcessing(): void {
+  const motivo = 'Quedó a medio procesar (posible reinicio del servidor por falta de memoria en un mail grande). Revisalo y procesalo de nuevo con "Procesar igual".';
+  const r = rawDb
+    .prepare(`UPDATE email_messages SET estado='NEEDS_REVIEW', error=COALESCE(error, ?), updated_at=? WHERE estado='PROCESSING'`)
+    .run(motivo, new Date().toISOString());
+  if (r.changes) logger.warn(`Recuperados ${r.changes} email(s) que quedaron trabados en PROCESSING → respaldo.`);
+}
+
 export function migrate(): void {
   runSchema();
   migrateColumns();
@@ -183,6 +198,7 @@ export function migrate(): void {
   backfillSolicitudPersonas();
   ensureDefaultDocumentTypes();
   ensurePlaceholderLocal();
+  recoverStuckProcessing();
   // Verificación mínima
   const count = db.select({ n: sql<number>`count(*)` }).from(schema.documentTypes).get();
   logger.info(`Migración OK. Tipos de documento: ${count?.n ?? 0}`);

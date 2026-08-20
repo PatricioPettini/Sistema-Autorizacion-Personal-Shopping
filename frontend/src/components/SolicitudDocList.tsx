@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useToast } from '../ui';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -22,7 +22,6 @@ export function SolicitudDocList({ solicitudId, docStatus, onChanged }: {
   const { notify } = useToast();
   const isAdmin = useAuth().user?.rol === 'ADMIN';
   const [busy, setBusy] = useState<number | null>(null);
-  const inputs = useRef<Record<number, HTMLInputElement | null>>({});
   if (!docStatus || docStatus.items.length === 0) {
     return <p className="muted">Esta solicitud no tiene documentación de grupo (definí el tipo de contratista de las personas).</p>;
   }
@@ -32,19 +31,6 @@ export function SolicitudDocList({ solicitudId, docStatus, onChanged }: {
     try {
       await api.post('/documentos/solicitud-verificar', { solicitudId, tipoDocumentoId: it.tipoId, estado });
       notify(estado === 'VERIFICADO' ? 'Documento aprobado para toda la solicitud.' : estado === 'RECHAZADO' ? 'Documento marcado como faltante.' : 'Aprobación deshecha.', 'success');
-      onChanged?.();
-    } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }
-  };
-
-  const subir = async (it: SolDocItem, file: File) => {
-    setBusy(it.tipoId);
-    try {
-      const form = new FormData();
-      form.append('solicitudId', String(solicitudId));
-      form.append('tipoDocumentoId', String(it.tipoId));
-      form.append('file', file);
-      await api.upload('/documentos/solicitud-upload', form);
-      notify('Documento cargado. Revisalo y aprobalo.', 'success');
       onChanged?.();
     } catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }
   };
@@ -70,12 +56,14 @@ export function SolicitudDocList({ solicitudId, docStatus, onChanged }: {
 
               {isAdmin && (
                 <div className="btn-row" style={{ marginTop: 8, alignItems: 'center' }}>
-                  <input ref={(el) => { inputs.current[it.tipoId] = el; }} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }}
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) subir(it, f); e.target.value = ''; }} />
-                  <button className="btn sm" disabled={busy === it.tipoId} onClick={() => inputs.current[it.tipoId]?.click()}>{it.tieneArchivo ? 'Reemplazar archivo' : '⬆ Subir archivo'}</button>
-                  {it.verificacion !== 'VERIFICADO' && <button className="btn success sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'VERIFICADO')}>✓ Aprobar</button>}
-                  {it.verificacion !== 'RECHAZADO' && <button className="btn danger sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'RECHAZADO')}>✕ Falta / Rechazar</button>}
-                  {it.verificacion !== 'PENDIENTE' && <button className="btn ghost sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'PENDIENTE')}>Deshacer</button>}
+                  {it.verificacion === 'PENDIENTE' ? (
+                    <>
+                      <button className="btn success sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'VERIFICADO')}>✓ Aprobar</button>
+                      <button className="btn danger sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'RECHAZADO')}>✕ Falta / Rechazar</button>
+                    </>
+                  ) : (
+                    <button className="btn ghost sm" disabled={busy === it.tipoId} onClick={() => verificar(it, 'PENDIENTE')}>Deshacer</button>
+                  )}
                 </div>
               )}
             </div>
