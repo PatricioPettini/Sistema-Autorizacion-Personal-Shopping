@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS document_types (
   obligatorio INTEGER NOT NULL DEFAULT 1,
   tiene_vencimiento INTEGER NOT NULL DEFAULT 0,
   categoria TEXT NOT NULL DEFAULT 'AMBOS',
+  alcance TEXT NOT NULL DEFAULT 'PERSONA',
   controla_emision INTEGER NOT NULL DEFAULT 0,
   orden INTEGER NOT NULL DEFAULT 0,
   activo INTEGER NOT NULL DEFAULT 1,
@@ -121,6 +122,32 @@ CREATE TABLE IF NOT EXISTS document_versions (
 );
 CREATE INDEX IF NOT EXISTS docver_doc_idx ON document_versions(documento_id);
 CREATE INDEX IF NOT EXISTS docver_hash_idx ON document_versions(sha256);
+
+CREATE TABLE IF NOT EXISTS solicitud_documentos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  solicitud_id INTEGER NOT NULL REFERENCES solicitudes(id),
+  tipo_documento_id INTEGER NOT NULL REFERENCES document_types(id),
+  original_filename TEXT,
+  normalized_filename TEXT,
+  stored_path_original TEXT,
+  stored_path_normalized TEXT,
+  mime_type TEXT,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT,
+  ocr_text TEXT,
+  fecha_emision TEXT,
+  clasificacion_confianza REAL,
+  verificacion TEXT NOT NULL DEFAULT 'PENDIENTE',
+  verificado_por_user_id INTEGER REFERENCES users(id),
+  fecha_verificacion TEXT,
+  nota_verificacion TEXT,
+  email_message_id INTEGER REFERENCES email_messages(id),
+  created_by_user_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  CONSTRAINT soldoc_sol_tipo_uq UNIQUE (solicitud_id, tipo_documento_id)
+);
+CREATE INDEX IF NOT EXISTS soldoc_sol_idx ON solicitud_documentos(solicitud_id);
 
 CREATE TABLE IF NOT EXISTS solicitudes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

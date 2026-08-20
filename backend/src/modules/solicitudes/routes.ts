@@ -6,7 +6,7 @@ import { audit } from '../../lib/audit.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { nowIso } from '../../lib/datetime.js';
 import { formatCuil, findOrCreatePersona, normalizeCuil, splitNombreCompleto } from '../personas/service.js';
-import { getPersonaDocStatus } from '../documentos/service.js';
+import { getPersonaDocStatus, getSolicitudDocStatus, personaAutorizableEnSolicitud } from '../documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona, recomputeAutorizacionesDePersona } from '../autorizaciones/service.js';
 import { recomputeSolicitudEstado, aggEstado, agruparPorEmail, asignarNroOrden } from './service.js';
 import { findOrCreateLocal } from '../locales/service.js';
@@ -172,6 +172,8 @@ export async function solicitudesRoutes(app: FastifyInstance) {
     const personas = sps.map((p) => {
       const localId = localIdPorSol.get(p.solicitudId) ?? sol.localId;
       const docStatus = getPersonaDocStatus(p.personaId);
+      // Autorizable = docs por-persona + docs de la solicitud (según su categoría) verificados.
+      const autoriz = personaAutorizableEnSolicitud(p.solicitudId, p.personaId);
       const vig = getVigencia(p.personaId, localId);
       const ingresoAbierto = db
         .select()
@@ -189,6 +191,8 @@ export async function solicitudesRoutes(app: FastifyInstance) {
         estado: p.estado,
         motivoRechazo: p.motivoRechazo,
         docStatus,
+        autorizable: autoriz.ok,
+        faltantesTotales: autoriz.faltantes,
         vigencia: vig.estado,
         autorizacionVigente: vig.autorizacion,
         ingresoAbierto,
@@ -201,6 +205,7 @@ export async function solicitudesRoutes(app: FastifyInstance) {
       email: email ? { id: email.id, remitente: email.remitente, asunto: email.asunto, fecha: email.fechaEmail, adjuntos: email.attachmentsCount, aviso: email.estado === 'PROCESSED' ? email.error : null } : null,
       comentarios,
       personas,
+      solicitudDocs: getSolicitudDocStatus(id),
     };
   });
 

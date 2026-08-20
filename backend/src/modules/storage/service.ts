@@ -32,6 +32,82 @@ function personaDirName(dni: string, apellido: string, nombre: string): string {
   return safeSegment(`${dni} - ${apellido} ${nombre}`.toUpperCase());
 }
 
+export interface SaveSolicitudDocInput {
+  solicitudId: number;
+  tipoDocumentoId: number;
+  buffer: Buffer;
+  originalFilename: string;
+  mimeType?: string | null;
+  createdByUserId?: number | null;
+  emailMessageId?: number | null;
+}
+
+/**
+ * Guarda un documento de alcance SOLICITUD (uno por solicitud+tipo). A diferencia de los
+ * documentos por persona, no hay versionado: al recargar, se reemplaza el archivo y se
+ * vuelve a dejar PENDIENTE de verificación.
+ */
+export function saveSolicitudDocument(input: SaveSolicitudDocInput): { soldocId: number } {
+  const tipo = db.select().from(schema.documentTypes).where(eq(schema.documentTypes.id, input.tipoDocumentoId)).get();
+  if (!tipo) throw new Error('Tipo de documento inexistente.');
+
+  const hash = sha256(input.buffer);
+  const extension = ext(input.originalFilename) || (input.mimeType === 'application/pdf' ? '.pdf' : '.bin');
+  const originalSafe = sanitizeName(input.originalFilename) || `documento${extension}`;
+  const normalizedName = safeSegment(`SOLICITUD_${input.solicitudId}_${tipo.codigo}`).replace(/ /g, '_') + extension;
+
+  const baseDir = safeJoin(env.docsPath, `SOLICITUD_${input.solicitudId}`, tipo.codigo);
+  const originalDir = safeJoin(baseDir, 'original');
+  const normalizedDir = safeJoin(baseDir, 'normalizado');
+  fs.mkdirSync(originalDir, { recursive: true });
+  fs.mkdirSync(normalizedDir, { recursive: true });
+  const originalPath = safeJoin(originalDir, originalSafe);
+  const normalizedPath = safeJoin(normalizedDir, normalizedName);
+  fs.writeFileSync(originalPath, input.buffer);
+  fs.writeFileSync(normalizedPath, input.buffer);
+
+  const existing = db
+    .select()
+    .from(schema.solicitudDocumentos)
+    .where(and(eq(schema.solicitudDocumentos.solicitudId, input.solicitudId), eq(schema.solicitudDocumentos.tipoDocumentoId, input.tipoDocumentoId)))
+    .get();
+
+  const values = {
+    originalFilename: input.originalFilename,
+    normalizedFilename: normalizedName,
+    storedPathOriginal: originalPath,
+    storedPathNormalized: normalizedPath,
+    mimeType: input.mimeType ?? null,
+    sizeBytes: input.buffer.length,
+    sha256: hash,
+    // Un archivo nuevo vuelve el documento a PENDIENTE (hay que re-verificarlo).
+    verificacion: 'PENDIENTE',
+    verificadoPorUserId: null,
+    fechaVerificacion: null,
+    emailMessageId: input.emailMessageId ?? null,
+    createdByUserId: input.createdByUserId ?? null,
+    updatedAt: nowIso(),
+  };
+
+  let soldocId: number;
+  if (existing) {
+    db.update(schema.solicitudDocumentos).set(values).where(eq(schema.solicitudDocumentos.id, existing.id)).run();
+    soldocId = existing.id;
+  } else {
+    const row = db.insert(schema.solicitudDocumentos).values({ solicitudId: input.solicitudId, tipoDocumentoId: input.tipoDocumentoId, ...values }).returning().get();
+    soldocId = row.id;
+  }
+
+  audit({
+    userId: input.createdByUserId ?? null,
+    accion: 'SOLICITUD_DOC_CARGADO',
+    entidad: 'solicitud_documento',
+    entidadId: soldocId,
+    detalle: { tipo: tipo.codigo, solicitudId: input.solicitudId },
+  });
+  return { soldocId };
+}
+
 /**
  * Guarda un documento como nueva versión:
  * - conserva el archivo ORIGINAL (nombre tal cual llegó),

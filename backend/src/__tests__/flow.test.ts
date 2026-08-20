@@ -4,7 +4,7 @@ import { migrate } from '../db/migrate.js';
 import { db, schema } from '../db/client.js';
 import { findOrCreatePersona } from '../modules/personas/service.js';
 import { saveDocumentVersion } from '../modules/storage/service.js';
-import { getPersonaDocStatus } from '../modules/documentos/service.js';
+import { getPersonaDocStatus, getSolicitudDocStatus, personaAutorizableEnSolicitud } from '../modules/documentos/service.js';
 import { getVigencia, recomputeAutorizacionPersona } from '../modules/autorizaciones/service.js';
 import { recomputeSolicitudEstado, asignarNroOrden, getNroOrden } from '../modules/solicitudes/service.js';
 import { todayLocal } from '../lib/datetime.js';
@@ -23,11 +23,21 @@ function verificar(personaId: number, codigo: string, fechaVencimiento?: string)
     .run();
 }
 
+/** Aprueba un documento de alcance SOLICITUD (uno para todo el grupo). */
+function verificarSol(solicitudId: number, codigo: string) {
+  const t = tipoId(codigo);
+  const existing = db.select().from(schema.solicitudDocumentos).where(and(eq(schema.solicitudDocumentos.solicitudId, solicitudId), eq(schema.solicitudDocumentos.tipoDocumentoId, t))).get();
+  if (!existing) db.insert(schema.solicitudDocumentos).values({ solicitudId, tipoDocumentoId: t, verificacion: 'VERIFICADO' }).run();
+  else db.update(schema.solicitudDocumentos).set({ verificacion: 'VERIFICADO' }).where(eq(schema.solicitudDocumentos.id, existing.id)).run();
+}
+
 function setCategoria(personaId: number, categoria: string) {
   db.update(schema.personas).set({ categoria }).where(eq(schema.personas.id, personaId)).run();
 }
 
-const DOCS_EMPRESA = ['FORM_931', 'PAGO_ARCA', 'NOMINA_ART', 'CLAUSULA_NO_REPETICION'];
+// Nuevo modelo de alcance: 931/ARCA/Cláusula son por SOLICITUD; ART es por PERSONA.
+const DOCS_EMPRESA_PERSONA = ['NOMINA_ART'];
+const DOCS_EMPRESA_SOL = ['FORM_931', 'PAGO_ARCA', 'CLAUSULA_NO_REPETICION'];
 
 beforeAll(() => {
   migrate();
@@ -55,50 +65,53 @@ describe('documentos y verificación manual', () => {
     expect(r3.version).toBe(2);
   });
 
-  it('exige los documentos obligatorios de la categoría (Empresa = 4)', () => {
+  it('por-persona (Empresa) exige solo Nómina ART; 931/ARCA/Cláusula son por solicitud', () => {
     const { persona } = findOrCreatePersona({ cuil: '20999888777', nombre: 'Luis', apellido: 'Diaz' });
-    // Sin categoría: solo aplica Cláusula (AMBOS) y pide definir el tipo.
+    // Sin categoría: pide definir el tipo.
     expect(getPersonaDocStatus(persona.id).requiereCategoria).toBe(true);
     setCategoria(persona.id, 'EMPRESA');
     const status = getPersonaDocStatus(persona.id);
-    expect(status.totalObligatorios).toBe(4);
+    expect(status.totalObligatorios).toBe(1); // solo Nómina ART es por-persona
     expect(status.estadoDocumental).toBe('INCOMPLETO');
-    expect(status.faltantes).toEqual(expect.arrayContaining(['Formulario 931', 'Pago de ARCA', 'Nómina ART']));
+    expect(status.faltantes).toEqual(['Nómina ART']);
+    // Los de alcance solicitud NO aparecen en el checklist por-persona.
+    expect(status.items.some((i) => i.codigo === 'FORM_931')).toBe(false);
   });
 
   it('un documento cuenta como presente SOLO cuando se aprueba manualmente', () => {
     const { persona } = findOrCreatePersona({ cuil: '20444555666', nombre: 'Rosa', apellido: 'Mota' });
     setCategoria(persona.id, 'EMPRESA');
-    saveDocumentVersion({ personaId: persona.id, tipoDocumentoId: tipoId('FORM_931'), buffer: Buffer.from('x'), originalFilename: 'f931.pdf' });
-    let doc = getPersonaDocStatus(persona.id).items.find((i) => i.codigo === 'FORM_931')!;
+    saveDocumentVersion({ personaId: persona.id, tipoDocumentoId: tipoId('NOMINA_ART'), buffer: Buffer.from('x'), originalFilename: 'art.pdf' });
+    let doc = getPersonaDocStatus(persona.id).items.find((i) => i.codigo === 'NOMINA_ART')!;
     expect(doc.presente).toBe(false);
-    verificar(persona.id, 'FORM_931');
-    doc = getPersonaDocStatus(persona.id).items.find((i) => i.codigo === 'FORM_931')!;
+    verificar(persona.id, 'NOMINA_ART');
+    doc = getPersonaDocStatus(persona.id).items.find((i) => i.codigo === 'NOMINA_ART')!;
     expect(doc.presente).toBe(true);
   });
 
-  it('un documento aprobado cuenta como presente (el vencimiento ya no es por documento)', () => {
-    const { persona } = findOrCreatePersona({ cuil: '20666777888', nombre: 'Elsa', apellido: 'Ríos' });
-    setCategoria(persona.id, 'EMPRESA');
-    verificar(persona.id, 'FORM_931');
-    const doc = getPersonaDocStatus(persona.id).items.find((i) => i.codigo === 'FORM_931')!;
-    expect(doc.presente).toBe(true);
-    expect(doc.vigencia).toBe('VIGENTE');
-  });
-
-  it('todosVerificados solo cuando TODOS los obligatorios están aprobados y vigentes', () => {
+  it('todosVerificados (por-persona) cuando se aprueban los obligatorios por-persona', () => {
     const { persona } = findOrCreatePersona({ cuil: '20777888999', nombre: 'Nora', apellido: 'Fuentes' });
     setCategoria(persona.id, 'EMPRESA');
     expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(false);
-    verificar(persona.id, 'FORM_931');
-    verificar(persona.id, 'PAGO_ARCA');
     verificar(persona.id, 'NOMINA_ART');
-    expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(false); // falta 1 (Cláusula)
-    verificar(persona.id, 'CLAUSULA_NO_REPETICION');
     expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(true);
   });
 
-  it('auto-autoriza solo con documentación completa Y fecha de vencimiento cargada', () => {
+  it('la autorización exige TAMBIÉN los documentos de la solicitud (931/ARCA/Cláusula)', () => {
+    const { persona } = findOrCreatePersona({ cuil: '20333222111', nombre: 'Iván', apellido: 'Sosa' });
+    setCategoria(persona.id, 'EMPRESA');
+    const local = db.insert(schema.locales).values({ nombre: `Local Sol ${Date.now()}`, estado: 'ACTIVO' }).returning().get();
+    const sol = db.insert(schema.solicitudes).values({ localId: local.id, estado: 'PENDIENTE' }).returning().get();
+    db.insert(schema.solicitudPersonas).values({ solicitudId: sol.id, personaId: persona.id }).run();
+
+    verificar(persona.id, 'NOMINA_ART'); // parte por-persona lista
+    expect(personaAutorizableEnSolicitud(sol.id, persona.id).ok).toBe(false); // faltan los de solicitud
+    for (const c of DOCS_EMPRESA_SOL) verificarSol(sol.id, c);
+    expect(getSolicitudDocStatus(sol.id).faltantes.length).toBe(0);
+    expect(personaAutorizableEnSolicitud(sol.id, persona.id).ok).toBe(true);
+  });
+
+  it('auto-autoriza solo con documentación completa (persona + solicitud) Y fecha de vencimiento', () => {
     const user = db.insert(schema.users).values({ nombre: 'Rev', email: `rev${Date.now()}@x.com`, passwordHash: 'x', rol: 'ADMIN' }).returning().get();
     const { persona } = findOrCreatePersona({ cuil: '20555444333', nombre: 'Sara', apellido: 'Vega' });
     setCategoria(persona.id, 'EMPRESA');
@@ -107,10 +120,11 @@ describe('documentos y verificación manual', () => {
     db.insert(schema.solicitudPersonas).values({ solicitudId: sol.id, personaId: persona.id }).run();
     const spEstado = () => db.select().from(schema.solicitudPersonas).where(and(eq(schema.solicitudPersonas.solicitudId, sol.id), eq(schema.solicitudPersonas.personaId, persona.id))).get()!.estado;
 
-    // 4/4 aprobados pero SIN fecha -> todavía NO autorizada.
-    for (const c of DOCS_EMPRESA) verificar(persona.id, c);
+    // Todo aprobado (por-persona + por-solicitud) pero SIN fecha -> todavía NO autorizada.
+    for (const c of DOCS_EMPRESA_PERSONA) verificar(persona.id, c);
+    for (const c of DOCS_EMPRESA_SOL) verificarSol(sol.id, c);
     recomputeAutorizacionPersona(sol.id, persona.id, user.id);
-    expect(getPersonaDocStatus(persona.id).todosVerificados).toBe(true);
+    expect(personaAutorizableEnSolicitud(sol.id, persona.id).ok).toBe(true);
     expect(spEstado()).not.toBe('AUTORIZADA');
 
     // Cargar fecha de vencimiento -> se auto-autoriza hasta esa fecha.

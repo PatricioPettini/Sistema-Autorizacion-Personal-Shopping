@@ -60,7 +60,9 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
   const aplicaPorCategoria = (t: (typeof todos)[number]) => t.categoria === 'AMBOS' || t.categoria === categoria;
 
   // Aplican: los de la categoría (más 'AMBOS') y los requisitos extra de esta persona.
-  const tipos = todos.filter((t) => aplicaPorCategoria(t) || extraIds.has(t.id));
+  // Se excluyen los de alcance SOLICITUD: esos se cargan/aprueban una vez para todo el grupo
+  // (ver getSolicitudDocStatus), no por persona.
+  const tipos = todos.filter((t) => (t.alcance !== 'SOLICITUD') && (aplicaPorCategoria(t) || extraIds.has(t.id)));
   // Un requisito extra puede referenciar un tipo desactivado o fuera de 'todos': lo traemos.
   for (const id of extraIds) {
     if (!tipos.some((t) => t.id === id)) {
@@ -151,4 +153,123 @@ export function getPersonaDocStatus(personaId: number): PersonaDocStatus {
     verificadosObligatorios,
     todosVerificados,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Documentos con alcance de SOLICITUD (uno para todo el grupo)
+// ---------------------------------------------------------------------------
+
+export interface SolicitudDocItem {
+  tipoId: number;
+  codigo: string;
+  nombre: string;
+  categoria: string;
+  obligatorio: boolean;
+  presente: boolean; // verificado
+  tieneArchivo: boolean;
+  soldocId: number | null;
+  originalFilename: string | null;
+  fechaEmision: string | null;
+  verificacion: 'PENDIENTE' | 'VERIFICADO' | 'RECHAZADO';
+  notaVerificacion: string | null;
+  clasificacionConfianza: number | null;
+}
+
+export interface SolicitudDocStatus {
+  items: SolicitudDocItem[];
+  faltantes: string[];
+  categoriasPresentes: string[]; // categorías de las personas de la solicitud
+  requiereCategoria: boolean; // hay personas sin categoría definida
+}
+
+/** Categorías (EMPRESA/MONOTRIBUTISTA) presentes entre las personas de una solicitud. */
+function categoriasDeSolicitud(solicitudId: number): { categorias: string[]; hayNull: boolean } {
+  const rows = db
+    .select({ categoria: schema.personas.categoria })
+    .from(schema.solicitudPersonas)
+    .innerJoin(schema.personas, eq(schema.personas.id, schema.solicitudPersonas.personaId))
+    .where(eq(schema.solicitudPersonas.solicitudId, solicitudId))
+    .all();
+  const categorias = [...new Set(rows.map((r) => r.categoria).filter((c): c is string => !!c))];
+  const hayNull = rows.some((r) => !r.categoria);
+  return { categorias, hayNull };
+}
+
+/** Tipos de documento de alcance SOLICITUD que aplican a una categoría (o 'AMBOS'). */
+function tiposSolicitudParaCategorias(categorias: string[]): (typeof schema.documentTypes.$inferSelect)[] {
+  const todos = db
+    .select()
+    .from(schema.documentTypes)
+    .where(and(eq(schema.documentTypes.activo, true), eq(schema.documentTypes.alcance, 'SOLICITUD')))
+    .orderBy(schema.documentTypes.orden)
+    .all();
+  return todos.filter((t) => t.categoria === 'AMBOS' || categorias.includes(t.categoria));
+}
+
+/** Estado de los documentos de alcance SOLICITUD de una solicitud (uno por tipo). */
+export function getSolicitudDocStatus(solicitudId: number): SolicitudDocStatus {
+  const { categorias, hayNull } = categoriasDeSolicitud(solicitudId);
+  const tipos = tiposSolicitudParaCategorias(categorias);
+  const items: SolicitudDocItem[] = [];
+  const faltantes: string[] = [];
+
+  for (const tipo of tipos) {
+    const doc = db
+      .select()
+      .from(schema.solicitudDocumentos)
+      .where(and(eq(schema.solicitudDocumentos.solicitudId, solicitudId), eq(schema.solicitudDocumentos.tipoDocumentoId, tipo.id)))
+      .get();
+    const verificacion = (doc?.verificacion ?? 'PENDIENTE') as SolicitudDocItem['verificacion'];
+    const presente = verificacion === 'VERIFICADO';
+    if (tipo.obligatorio && !presente) faltantes.push(tipo.nombre);
+    items.push({
+      tipoId: tipo.id,
+      codigo: tipo.codigo,
+      nombre: tipo.nombre,
+      categoria: tipo.categoria,
+      obligatorio: tipo.obligatorio,
+      presente,
+      tieneArchivo: !!doc?.storedPathNormalized || !!doc?.storedPathOriginal,
+      soldocId: doc?.id ?? null,
+      originalFilename: doc?.originalFilename ?? null,
+      fechaEmision: doc?.fechaEmision ?? null,
+      verificacion,
+      notaVerificacion: doc?.notaVerificacion ?? null,
+      clasificacionConfianza: doc?.clasificacionConfianza ?? null,
+    });
+  }
+
+  return { items, faltantes, categoriasPresentes: categorias, requiereCategoria: hayNull && tipos.length > 0 };
+}
+
+/** Recuento de documentos de solicitud obligatorios que aplican a UNA categoría de persona. */
+export function solicitudDocsParaCategoria(solicitudId: number, categoria: string | null): { total: number; verificados: number; faltantes: string[] } {
+  const tipos = tiposSolicitudParaCategorias(categoria ? [categoria] : []).filter((t) => t.obligatorio);
+  let verificados = 0;
+  const faltantes: string[] = [];
+  for (const tipo of tipos) {
+    const doc = db
+      .select({ verificacion: schema.solicitudDocumentos.verificacion })
+      .from(schema.solicitudDocumentos)
+      .where(and(eq(schema.solicitudDocumentos.solicitudId, solicitudId), eq(schema.solicitudDocumentos.tipoDocumentoId, tipo.id)))
+      .get();
+    if (doc?.verificacion === 'VERIFICADO') verificados++;
+    else faltantes.push(tipo.nombre);
+  }
+  return { total: tipos.length, verificados, faltantes };
+}
+
+/**
+ * ¿Está la persona lista para autorizar dentro de una solicitud? Combina su documentación
+ * por-persona (ART / Pago de Monotributo) con la de alcance SOLICITUD que le corresponde por
+ * su categoría (Form 931, Pago ARCA, Cláusula / Seguro de Vida).
+ */
+export function personaAutorizableEnSolicitud(solicitudId: number, personaId: number): { ok: boolean; faltantes: string[] } {
+  const persona = db.select().from(schema.personas).where(eq(schema.personas.id, personaId)).get();
+  const p = getPersonaDocStatus(personaId);
+  if (p.requiereCategoria) return { ok: false, faltantes: ['definir si es empresa o monotributista'] };
+  const s = solicitudDocsParaCategoria(solicitudId, persona?.categoria ?? null);
+  const total = p.totalObligatorios + s.total;
+  const verificados = p.verificadosObligatorios + s.verificados;
+  return { ok: total > 0 && verificados === total, faltantes: [...p.faltantes, ...s.faltantes] };
 }

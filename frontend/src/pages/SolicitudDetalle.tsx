@@ -6,6 +6,7 @@ import { Badge, Spinner, Modal, useToast } from '../ui';
 import { DocList } from '../components/DocList';
 import { EmailInline } from '../components/EmailInline';
 import { SentEmails } from '../components/SentEmails';
+import { SolicitudDocList } from '../components/SolicitudDocList';
 import { useAuth } from '../auth';
 
 type AccionModal = { tipo: 'observar' | 'rechazar'; personaId: number; solicitudId: number; nombre: string };
@@ -66,7 +67,7 @@ export default function SolicitudDetalle() {
   useEffect(() => { if (data?.solicitud) setVenc(data.solicitud.fechaVencimiento ?? ''); }, [data?.solicitud?.fechaVencimiento]);
 
   if (!data) return <Spinner />;
-  const { solicitud, local, email, comentarios, personas } = data;
+  const { solicitud, local, email, comentarios, personas, solicitudDocs } = data;
   const sinLocal = local?.nombre === '(Sin asignar)';
   const localSugerido = localFromAsunto(email?.asunto);
   const catsSolicitud = new Set<string>(personas.map((p: any) => p.docStatus?.categoria).filter(Boolean));
@@ -170,14 +171,14 @@ export default function SolicitudDetalle() {
         {p.estado === 'RECHAZADA' && p.motivoRechazo && <div className="alert error" style={{ marginTop: 10 }}>Rechazada: {p.motivoRechazo}</div>}
         {isAdmin && (
           <>
-            {p.docStatus.todosVerificados && !fechaVenc && (
-              <div className="alert warn" style={{ marginTop: 10 }}>✅ Documentación completa. Cargá la <strong>"Vigencia hasta"</strong> (arriba) para autorizarla.</div>
+            {p.autorizable && !fechaVenc && (
+              <div className="alert warn" style={{ marginTop: 10 }}>✅ Documentación completa (persona + solicitud). Cargá la <strong>"Vigencia hasta"</strong> (arriba) para autorizarla.</div>
             )}
-            {p.docStatus.todosVerificados && fechaVenc && p.estado === 'AUTORIZADA' && (
+            {p.autorizable && fechaVenc && p.estado === 'AUTORIZADA' && (
               <div className="alert success" style={{ marginTop: 10 }}>🟢 Autorizada automáticamente. Puede ingresar hasta el <strong>{fmtSoloFecha(fechaVenc)}</strong>.</div>
             )}
-            {!p.docStatus.todosVerificados && (
-              <div className="alert warn" style={{ marginTop: 10 }}>Faltan aprobar {p.docStatus.totalObligatorios - p.docStatus.verificadosObligatorios} de {p.docStatus.totalObligatorios} documentos obligatorios.</div>
+            {!p.autorizable && (
+              <div className="alert warn" style={{ marginTop: 10 }}>Falta: {(p.faltantesTotales ?? []).join(', ') || 'documentación por aprobar'}.</div>
             )}
             <div className="btn-row" style={{ marginTop: 12 }}>
               <button className="btn warning sm" onClick={() => setAccion({ tipo: 'observar', personaId: p.personaId, solicitudId: p.solicitudId, nombre: `${p.apellido}, ${p.nombre}` })}>Observar</button>
@@ -249,6 +250,16 @@ export default function SolicitudDetalle() {
 
       {email?.aviso && personas.length === 0 && (
         <div className="alert warn">📄 {email.aviso}{isAdmin && ' Usá "+ Agregar persona" (los adjuntos del email se ven más abajo).'}</div>
+      )}
+
+      {/* Documentación de alcance SOLICITUD (una sola para todo el grupo). */}
+      {personas.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="card-head">📎 Documentación de la solicitud <span className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>(vale para todas las personas del grupo)</span></div>
+          <div className="card-body">
+            <SolicitudDocList solicitudId={solicitud.id} docStatus={solicitudDocs} onChanged={reload} />
+          </div>
+        </div>
       )}
 
       {/* Resumen de personas (la revisión completa se hace en el modal). */}
@@ -325,6 +336,10 @@ export default function SolicitudDetalle() {
             <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
               <div style={{ flex: '1 1 55%', overflow: 'auto', padding: 16, borderRight: '1px solid var(--border)' }}>
                 <div className="muted" style={{ marginBottom: 10 }}>Aprobá cada requisito contra los PDF de la derecha. Al completar todos, la persona queda autorizada sola.</div>
+                <div className="card" style={{ marginBottom: 14 }}>
+                  <div className="card-head" style={{ fontSize: 13 }}>📎 Documentación de la solicitud <span className="muted" style={{ fontWeight: 400 }}>(una para todo el grupo)</span></div>
+                  <div className="card-body"><SolicitudDocList solicitudId={solicitud.id} docStatus={solicitudDocs} onChanged={reload} /></div>
+                </div>
                 {personas.map((p: any) => <PersonaCard key={p.spId} p={p} />)}
               </div>
               <div style={{ flex: '1 1 45%', overflow: 'auto', padding: 16 }}>

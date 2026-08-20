@@ -2,7 +2,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
 import { sendMail } from '../email/mailer.js';
 import { formatCuil } from '../personas/service.js';
-import { getPersonaDocStatus } from '../documentos/service.js';
+import { personaAutorizableEnSolicitud } from '../documentos/service.js';
 import { audit } from '../../lib/audit.js';
 import { todayLocal } from '../../lib/datetime.js';
 
@@ -122,7 +122,7 @@ export async function notifyResultadoRevision(solicitudId: number): Promise<{ en
     // El motivo lo escribe una persona y suele venir con punto final: no duplicarlo.
     const motivo = p.motivoRechazo?.trim().replace(/\.+$/, '');
     if (p.estado === 'RECHAZADA') return `✗ ${nom}\n   RECHAZADO${motivo ? ` — ${motivo}` : ''}.`;
-    const faltantes = getPersonaDocStatus(p.personaId).faltantes;
+    const faltantes = personaAutorizableEnSolicitud(solicitudId, p.personaId).faltantes;
     return `• ${nom}\n   PENDIENTE — falta: ${faltantes.length ? faltantes.join(', ') : 'documentación por revisar'}.`;
   });
 

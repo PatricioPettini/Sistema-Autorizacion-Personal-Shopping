@@ -6,10 +6,10 @@ import { db, schema } from '../../db/client.js';
 import { audit } from '../../lib/audit.js';
 import { badRequest, notFound, conflict } from '../../lib/errors.js';
 import { isAllowedFile, contentDisposition } from '../../lib/files.js';
-import { saveDocumentVersion } from '../storage/service.js';
+import { saveDocumentVersion, saveSolicitudDocument } from '../storage/service.js';
 import { nowIso } from '../../lib/datetime.js';
 import { env } from '../../config/env.js';
-import { recomputeAutorizacionesDePersona } from '../autorizaciones/service.js';
+import { recomputeAutorizacionesDePersona, recomputeAutorizacionesDeSolicitud } from '../autorizaciones/service.js';
 
 const MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -126,6 +126,78 @@ export async function documentosRoutes(app: FastifyInstance) {
     // autorización automáticamente en las solicitudes donde participa.
     recomputeAutorizacionesDePersona(data.personaId, req.user!.id);
     return { ok: true };
+  });
+
+  // --- Documentos de alcance SOLICITUD (uno para todo el grupo) ---
+
+  // Carga de un documento de solicitud (Form 931, Pago ARCA, Cláusula, Seguro de Vida).
+  app.post('/solicitud-upload', soloAdmin, async (req) => {
+    const parts = req.parts();
+    let solicitudId = 0;
+    let tipoDocumentoId = 0;
+    let fileBuffer: Buffer | null = null;
+    let filename = '';
+    let mime = '';
+    for await (const part of parts) {
+      if (part.type === 'file') { filename = part.filename; mime = part.mimetype; fileBuffer = await part.toBuffer(); }
+      else {
+        if (part.fieldname === 'solicitudId') solicitudId = Number(part.value);
+        if (part.fieldname === 'tipoDocumentoId') tipoDocumentoId = Number(part.value);
+      }
+    }
+    if (!fileBuffer) throw badRequest('No se recibió ningún archivo.');
+    if (!solicitudId || !tipoDocumentoId) throw badRequest('Faltan datos: solicitud o tipo de documento.');
+    if (fileBuffer.length > env.rules.maxFileMb * 1024 * 1024) throw badRequest('El archivo supera el tamaño máximo permitido.');
+    if (!isAllowedFile(filename, mime)) throw badRequest('Formato no permitido. Se aceptan PDF, JPG o PNG.');
+
+    const tipo = db.select().from(schema.documentTypes).where(eq(schema.documentTypes.id, tipoDocumentoId)).get();
+    if (!tipo || tipo.alcance !== 'SOLICITUD') throw badRequest('Ese documento no es de alcance solicitud.');
+
+    const result = saveSolicitudDocument({ solicitudId, tipoDocumentoId, buffer: fileBuffer, originalFilename: filename, mimeType: mime, createdByUserId: req.user!.id });
+    // Recargar un doc lo deja PENDIENTE: puede desautorizar a las personas ya autorizadas.
+    recomputeAutorizacionesDeSolicitud(solicitudId, req.user!.id);
+    return result;
+  });
+
+  // Verificación de un documento de alcance SOLICITUD.
+  const verificarSolSchema = z.object({
+    solicitudId: z.number().int(),
+    tipoDocumentoId: z.number().int(),
+    estado: z.enum(['PENDIENTE', 'VERIFICADO', 'RECHAZADO']),
+    nota: z.string().optional(),
+  });
+  app.post('/solicitud-verificar', soloAdmin, async (req) => {
+    const data = verificarSolSchema.parse(req.body);
+    let doc = db
+      .select()
+      .from(schema.solicitudDocumentos)
+      .where(and(eq(schema.solicitudDocumentos.solicitudId, data.solicitudId), eq(schema.solicitudDocumentos.tipoDocumentoId, data.tipoDocumentoId)))
+      .get();
+    if (!doc) {
+      doc = db.insert(schema.solicitudDocumentos).values({ solicitudId: data.solicitudId, tipoDocumentoId: data.tipoDocumentoId }).returning().get();
+    }
+    db.update(schema.solicitudDocumentos)
+      .set({ verificacion: data.estado, verificadoPorUserId: req.user!.id, fechaVerificacion: nowIso(), notaVerificacion: data.nota || null, updatedAt: nowIso() })
+      .where(eq(schema.solicitudDocumentos.id, doc.id))
+      .run();
+    audit({ userId: req.user!.id, accion: 'SOLICITUD_DOC_VERIFICADO', entidad: 'solicitud_documento', entidadId: doc.id, detalle: { estado: data.estado, tipoDocumentoId: data.tipoDocumentoId, solicitudId: data.solicitudId }, ip: req.ip });
+    // Un documento de solicitud afecta a TODAS sus personas.
+    recomputeAutorizacionesDeSolicitud(data.solicitudId, req.user!.id);
+    return { ok: true };
+  });
+
+  // Ver / descargar el archivo de un documento de solicitud.
+  app.get('/solicitud-doc/:id/archivo', async (req, reply) => {
+    const id = Number((req.params as any).id);
+    const download = String((req.query as any).download ?? '') === '1';
+    const doc = db.select().from(schema.solicitudDocumentos).where(eq(schema.solicitudDocumentos.id, id)).get();
+    if (!doc) throw notFound('Documento no encontrado.');
+    const filePath = doc.storedPathNormalized || doc.storedPathOriginal;
+    if (!filePath || !fs.existsSync(filePath)) throw notFound('El archivo no está disponible en el almacenamiento.');
+    const ext2 = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
+    reply.header('Content-Type', MIME[ext2] ?? 'application/octet-stream');
+    reply.header('Content-Disposition', contentDisposition(download ? 'attachment' : 'inline', doc.normalizedFilename ?? doc.originalFilename));
+    return reply.send(fs.createReadStream(filePath));
   });
 
   // --- Requisitos EXTRA por persona (ej. trabajo en altura) ---

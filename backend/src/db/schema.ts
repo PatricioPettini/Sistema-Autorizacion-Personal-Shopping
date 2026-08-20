@@ -56,6 +56,8 @@ export const documentTypes = sqliteTable('document_types', {
   tieneVencimiento: integer('tiene_vencimiento', { mode: 'boolean' }).notNull().default(false),
   // A qué contratista aplica: 'EMPRESA' | 'MONOTRIBUTISTA' | 'AMBOS'
   categoria: text('categoria').notNull().default('AMBOS'),
+  // Alcance del documento: 'PERSONA' (uno por cada persona) | 'SOLICITUD' (uno para todo el grupo).
+  alcance: text('alcance').notNull().default('PERSONA'),
   // Si controla que la fecha de emisión no supere los días máximos (30).
   controlaEmision: integer('controla_emision', { mode: 'boolean' }).notNull().default(false),
   orden: integer('orden').notNull().default(0),
@@ -165,6 +167,37 @@ export const documentVersions = sqliteTable(
     createdAt: createdAt(),
   },
   (t) => ({ docIdx: index('docver_doc_idx').on(t.documentoId), hashIdx: index('docver_hash_idx').on(t.sha256) }),
+);
+
+// Documentos con alcance de SOLICITUD (uno para todo el grupo: Form 931, Pago ARCA,
+// Cláusula, Seguro de Vida). Se suben y verifican una sola vez por (solicitud, tipo).
+export const solicitudDocumentos = sqliteTable(
+  'solicitud_documentos',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    solicitudId: integer('solicitud_id').notNull().references(() => solicitudes.id),
+    tipoDocumentoId: integer('tipo_documento_id').notNull().references(() => documentTypes.id),
+    originalFilename: text('original_filename'),
+    normalizedFilename: text('normalized_filename'),
+    storedPathOriginal: text('stored_path_original'),
+    storedPathNormalized: text('stored_path_normalized'),
+    mimeType: text('mime_type'),
+    sizeBytes: integer('size_bytes').notNull().default(0),
+    sha256: text('sha256'),
+    ocrText: text('ocr_text'),
+    fechaEmision: text('fecha_emision'),
+    clasificacionConfianza: real('clasificacion_confianza'),
+    // PENDIENTE | VERIFICADO | RECHAZADO
+    verificacion: text('verificacion').notNull().default('PENDIENTE'),
+    verificadoPorUserId: integer('verificado_por_user_id').references(() => users.id),
+    fechaVerificacion: text('fecha_verificacion'),
+    notaVerificacion: text('nota_verificacion'),
+    emailMessageId: integer('email_message_id').references(() => emailMessages.id),
+    createdByUserId: integer('created_by_user_id').references(() => users.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ solTipoUq: unique('soldoc_sol_tipo_uq').on(t.solicitudId, t.tipoDocumentoId) }),
 );
 
 // ---------------------------------------------------------------------------

@@ -6,13 +6,14 @@ import { logger } from '../lib/logger.js';
 //  EMPRESA: Form 931, Pago de ARCA, Nómina ART, Cláusula de No Repetición.
 //  MONOTRIBUTISTA: Seguro de Vida Colectivo, Pago del Monotributo, Cláusula de No Repetición.
 // El vencimiento de cada documento lo carga manualmente Seguridad al aprobarlo.
+// alcance: 'SOLICITUD' = uno para todo el grupo; 'PERSONA' = uno por cada persona.
 const DEFAULT_DOCUMENT_TYPES = [
-  { codigo: 'FORM_931', nombre: 'Formulario 931', obligatorio: true, categoria: 'EMPRESA', controlaEmision: false, orden: 1 },
-  { codigo: 'PAGO_ARCA', nombre: 'Pago de ARCA', obligatorio: true, categoria: 'EMPRESA', controlaEmision: false, orden: 2 },
-  { codigo: 'NOMINA_ART', nombre: 'Nómina ART', obligatorio: true, categoria: 'EMPRESA', controlaEmision: false, orden: 3 },
-  { codigo: 'SEGURO_VIDA_COLECTIVO', nombre: 'Seguro de Vida Colectivo (mín. $20.000.000)', obligatorio: true, categoria: 'MONOTRIBUTISTA', controlaEmision: false, orden: 4 },
-  { codigo: 'PAGO_MONOTRIBUTO', nombre: 'Pago del Monotributo', obligatorio: true, categoria: 'MONOTRIBUTISTA', controlaEmision: false, orden: 5 },
-  { codigo: 'CLAUSULA_NO_REPETICION', nombre: 'Cláusula de No Repetición (a favor de Cencosud SA)', obligatorio: true, categoria: 'AMBOS', controlaEmision: false, orden: 6 },
+  { codigo: 'FORM_931', nombre: 'Formulario 931', obligatorio: true, categoria: 'EMPRESA', alcance: 'SOLICITUD', controlaEmision: false, orden: 1 },
+  { codigo: 'PAGO_ARCA', nombre: 'Pago de ARCA', obligatorio: true, categoria: 'EMPRESA', alcance: 'SOLICITUD', controlaEmision: false, orden: 2 },
+  { codigo: 'NOMINA_ART', nombre: 'Nómina ART', obligatorio: true, categoria: 'EMPRESA', alcance: 'PERSONA', controlaEmision: false, orden: 3 },
+  { codigo: 'SEGURO_VIDA_COLECTIVO', nombre: 'Seguro de Vida Colectivo (mín. $20.000.000)', obligatorio: true, categoria: 'MONOTRIBUTISTA', alcance: 'SOLICITUD', controlaEmision: false, orden: 4 },
+  { codigo: 'PAGO_MONOTRIBUTO', nombre: 'Pago del Monotributo', obligatorio: true, categoria: 'MONOTRIBUTISTA', alcance: 'PERSONA', controlaEmision: false, orden: 5 },
+  { codigo: 'CLAUSULA_NO_REPETICION', nombre: 'Cláusula de No Repetición (a favor de Cencosud SA)', obligatorio: true, categoria: 'AMBOS', alcance: 'SOLICITUD', controlaEmision: false, orden: 6 },
 ];
 
 // Requisitos EXTRA (categoria='EXTRA'): NO se aplican por categoría. Son un catálogo
@@ -45,6 +46,7 @@ function migrateColumns(): void {
   ensureColumn('documentos', 'fecha_verificacion', 'TEXT');
   ensureColumn('documentos', 'nota_verificacion', 'TEXT');
   ensureColumn('document_types', 'categoria', "TEXT NOT NULL DEFAULT 'AMBOS'");
+  ensureColumn('document_types', 'alcance', "TEXT NOT NULL DEFAULT 'PERSONA'");
   ensureColumn('document_types', 'controla_emision', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('personas', 'categoria', 'TEXT');
   ensureColumn('personas', 'empresa', 'TEXT');
@@ -119,17 +121,18 @@ export function ensureDefaultDocumentTypes(): void {
   for (const dt of DEFAULT_DOCUMENT_TYPES) {
     rawDb
       .prepare(
-        `INSERT INTO document_types (codigo, nombre, obligatorio, tiene_vencimiento, categoria, controla_emision, orden, activo)
-         VALUES (?, ?, ?, 0, ?, ?, ?, 1)
+        `INSERT INTO document_types (codigo, nombre, obligatorio, tiene_vencimiento, categoria, alcance, controla_emision, orden, activo)
+         VALUES (?, ?, ?, 0, ?, ?, ?, ?, 1)
          ON CONFLICT(codigo) DO UPDATE SET
            nombre = excluded.nombre,
            obligatorio = excluded.obligatorio,
            categoria = excluded.categoria,
+           alcance = excluded.alcance,
            controla_emision = excluded.controla_emision,
            orden = excluded.orden,
            activo = 1`,
       )
-      .run(dt.codigo, dt.nombre, dt.obligatorio ? 1 : 0, dt.categoria, dt.controlaEmision ? 1 : 0, dt.orden);
+      .run(dt.codigo, dt.nombre, dt.obligatorio ? 1 : 0, dt.categoria, dt.alcance, dt.controlaEmision ? 1 : 0, dt.orden);
   }
   // Catálogo EXTRA: obligatorio cuando se asigna, pero categoria='EXTRA' => no auto-aplica.
   // No pisamos 'nombre' ni 'activo' si el admin ya lo editó (solo garantizamos que exista).

@@ -2,7 +2,7 @@ import { eq, and, desc } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
 import { todayLocal, nowIso } from '../../lib/datetime.js';
 import { env } from '../../config/env.js';
-import { getPersonaDocStatus } from '../documentos/service.js';
+import { personaAutorizableEnSolicitud } from '../documentos/service.js';
 import { recomputeSolicitudEstado } from '../solicitudes/service.js';
 import { audit } from '../../lib/audit.js';
 
@@ -61,7 +61,7 @@ export function recomputeAutorizacionPersona(solicitudId: number, personaId: num
   if (!sp) return;
   if (sp.estado === 'RECHAZADA') return; // decisión manual: no auto-modificar
 
-  const docStatus = getPersonaDocStatus(personaId);
+  const autorizable = personaAutorizableEnSolicitud(solicitudId, personaId).ok;
   const venc = sol.fechaVencimiento ?? null;
   const activa = db
     .select()
@@ -70,7 +70,7 @@ export function recomputeAutorizacionPersona(solicitudId: number, personaId: num
     .orderBy(desc(schema.autorizaciones.fechaDecision))
     .get();
 
-  if (docStatus.todosVerificados && venc) {
+  if (autorizable && venc) {
     // Documentación completa + fecha de vencimiento cargada => AUTORIZADA hasta esa fecha.
     if (!activa) {
       const aut = db
@@ -109,6 +109,13 @@ export function recomputeAutorizacionPersona(solicitudId: number, personaId: num
 export function recomputeAutorizacionesDePersona(personaId: number, userId: number): void {
   const sps = db.select({ solicitudId: schema.solicitudPersonas.solicitudId }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.personaId, personaId)).all();
   for (const sp of sps) recomputeAutorizacionPersona(sp.solicitudId, personaId, userId);
+}
+
+/** Recalcula la autorización de TODAS las personas de una solicitud (ej. al cambiar un
+ *  documento de alcance SOLICITUD, que las afecta a todas). */
+export function recomputeAutorizacionesDeSolicitud(solicitudId: number, userId: number): void {
+  const sps = db.select({ personaId: schema.solicitudPersonas.personaId }).from(schema.solicitudPersonas).where(eq(schema.solicitudPersonas.solicitudId, solicitudId)).all();
+  for (const sp of sps) recomputeAutorizacionPersona(solicitudId, sp.personaId, userId);
 }
 
 export { env };
