@@ -174,7 +174,12 @@ export function ensurePlaceholderLocal(): void {
     .run(LOCAL_SIN_ASIGNAR);
 }
 
+/** Id del local "(Sin asignar)". Se crea recién cuando hace falta (un email sin local detectable),
+ *  no al arrancar: así no aparece en la lista si nunca se usa. */
 export function getPlaceholderLocalId(): number {
+  const row = rawDb.prepare('SELECT id FROM locales WHERE nombre = ?').get(LOCAL_SIN_ASIGNAR) as { id: number } | undefined;
+  if (row) return row.id;
+  ensurePlaceholderLocal();
   return (rawDb.prepare('SELECT id FROM locales WHERE nombre = ?').get(LOCAL_SIN_ASIGNAR) as { id: number }).id;
 }
 
@@ -197,7 +202,7 @@ export function migrate(): void {
   migrateSolicitudPersonaIdOpcional();
   backfillSolicitudPersonas();
   ensureDefaultDocumentTypes();
-  ensurePlaceholderLocal();
+  // El local "(Sin asignar)" ya NO se crea al arrancar: se crea on-demand en getPlaceholderLocalId().
   recoverStuckProcessing();
   // Verificación mínima
   const count = db.select({ n: sql<number>`count(*)` }).from(schema.documentTypes).get();

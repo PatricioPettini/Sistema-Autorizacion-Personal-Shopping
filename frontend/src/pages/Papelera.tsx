@@ -24,6 +24,14 @@ export default function Papelera() {
     catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }
   };
 
+  const purgar = async (r: Row) => {
+    if (!await confirm({ title: 'Borrar definitivamente', danger: true, confirmLabel: 'Borrar definitivo',
+      message: `¿Borrar DEFINITIVAMENTE la solicitud de "${r.local}"${r.nroOrden ? ` (${r.nroOrden})` : ''}?\n\nEsta acción NO se puede deshacer: se borra la solicitud y las personas que no tengan otra solicitud ni ingresos.` })) return;
+    setBusy(r.id);
+    try { await api.del(`/solicitudes/${r.id}/purgar`); notify('Solicitud borrada definitivamente.', 'success'); reload(); }
+    catch (e: any) { notify(e.message, 'error'); } finally { setBusy(null); }
+  };
+
   return (
     <>
       <div className="page-head">
@@ -54,6 +62,7 @@ export default function Papelera() {
                       <span className="btn-row">
                         <button className="btn ghost sm" onClick={() => nav(`/solicitudes/${r.id}`)}>Ver</button>
                         <button className="btn primary sm" disabled={busy === r.id} onClick={() => restaurar(r)}>↩ Restaurar</button>
+                        <button className="btn danger sm" disabled={busy === r.id} onClick={() => purgar(r)}>🗑 Borrar definitivo</button>
                       </span>
                     </td>
                   </tr>
